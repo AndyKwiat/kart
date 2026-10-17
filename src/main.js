@@ -10,12 +10,14 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { FXAAPass } from 'three/examples/jsm/postprocessing/FXAAPass.js';
 
 const LAPS = 3;
 const COUNTDOWN = 3;
 
 const pixelRatio = Math.min(window.devicePixelRatio, 2);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// No MSAA on the canvas: everything goes through the composer (FXAA at the end).
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
@@ -31,14 +33,52 @@ const { sun, ground, center } = buildScenery(scene, track);
 const sky = new Sky(scene, renderer, center);
 const effects = new Effects(scene);
 
-// Render through a multisampled HDR target so emissive things (lights, pads,
-// sparks, boost flames) can bloom.
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+// Render through an HDR target so emissive things (lights, pads, sparks, boost
+// flames) can bloom. Anti-aliasing is FXAA at the end: 4x MSAA on the HDR
+// target cost ~3.5 ms/frame (more than the whole scene) and made bloom 3x
+// slower; FXAA costs a fraction of a millisecond.
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
 composer.setPixelRatio(pixelRatio);
 composer.setSize(window.innerWidth, window.innerHeight);
 composer.addPass(new RenderPass(scene, camera));
-composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.45, 1.6));
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.45, 1.6);
+// The blur is soft anyway: run the whole bloom chain at half resolution.
+const bloomSetSize = bloom.setSize.bind(bloom);
+bloom.setSize = (w, h) => bloomSetSize(w / 2, h / 2);
+composer.addPass(bloom);
 composer.addPass(new OutputPass());
+composer.addPass(new FXAAPass());
+
+// Adaptive resolution: if frames run long (sustained < ~50 fps), step the
+// render scale down. Rendering is fill-rate bound, so this is the big lever.
+const QUALITY_SCALES = [2, 1.5, 1.25, 1].filter((q) => q <= pixelRatio);
+if (!QUALITY_SCALES.length) QUALITY_SCALES.push(pixelRatio);
+let qualityLevel = 0;
+let slowTime = 0, sampleTime = 0, sampleFrames = 0;
+function applyQuality() {
+  const pr = QUALITY_SCALES[qualityLevel];
+  renderer.setPixelRatio(pr);
+  composer.setPixelRatio(pr);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+}
+function adaptQuality(elapsed) {
+  // Real frame time; skip gaps (tab switches, background throttling).
+  if (elapsed > 0.25 || document.hidden) return;
+  sampleTime += elapsed;
+  sampleFrames++;
+  if (sampleTime < 1) return;
+  const fps = sampleFrames / sampleTime;
+  sampleTime = 0;
+  sampleFrames = 0;
+  slowTime = fps < 50 ? slowTime + 1 : 0;
+  // Two slow seconds in a row (ignores one-off hitches like tab switches).
+  if (slowTime >= 2 && qualityLevel < QUALITY_SCALES.length - 1) {
+    qualityLevel++;
+    slowTime = 0;
+    applyQuality();
+  }
+}
 
 const shakeOffset = new THREE.Vector3();
 function render() {
@@ -46,7 +86,7 @@ function render() {
   shakeOffset.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
   camera.position.add(shakeOffset);
   sky.update(0, camera);
-  effects.setScale((window.innerHeight * pixelRatio) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)));
+  effects.setScale((window.innerHeight * renderer.getPixelRatio()) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)));
   composer.render();
   camera.position.sub(shakeOffset);
 }
@@ -201,14 +241,18 @@ function step(dt) {
     const near = car === player || camera.position.distanceToSquared(car.mesh.position) < 140 * 140;
     effects.car(car, dt, near, car === player);
   }
-  effects.update(dt);
 
   const lap = Math.min(LAPS, Math.max(1, Math.floor(player.progress / track.N) + 1));
   if (state === 'race' && lap !== lastLap && lap > lastLap) {
     hud.flash(lap === LAPS ? 'FINAL LAP!' : `LAP ${lap}`, clock);
   }
   lastLap = Math.max(lastLap, lap);
+  hud.tickFlash(clock);
+  placeCamera(dt);
+}
 
+// DOM/minimap updates once per rendered frame (not per physics substep).
+function updateHud() {
   const order = rankOrder();
   const t = track.tan[player.idx];
   const wrongWay = state === 'race' && player.speed > 5 &&
@@ -223,23 +267,24 @@ function step(dt) {
     total: cars.length,
     wrongWay,
   });
-  hud.tickFlash(clock);
   if (state === 'finished' && clock - finishShownAt > 1.5) hud.showResults(order, player);
   hud.drawMinimap(cars, player);
-
-  placeCamera(dt);
 }
 
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const elapsed = (now - last) / 1000;
+  const dt = Math.min(0.05, elapsed);
   last = now;
   // Two substeps keep collisions stable at low frame rates.
   if (!paused) {
     step(dt / 2);
     step(dt / 2);
+    effects.update(dt);
     sky.update(dt, camera);
+    updateHud();
     render();
+    adaptQuality(elapsed);
   }
   requestAnimationFrame(frame);
 }
@@ -334,5 +379,5 @@ if (import.meta.env.DEV) {
     camera.updateProjectionMatrix();
     render();
   };
-  window.__kart = { cars, player, track, step, render, effects, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
+  window.__kart = { cars, player, track, step, render, effects, renderer, composer, scene, camera, hud, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
 }

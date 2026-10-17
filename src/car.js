@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CURB_WIDTH } from './track.js';
 
 export const CAR_RADIUS = 1.6;
@@ -50,6 +51,36 @@ function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
+}
+
+// Collapse a group's child meshes into one mesh per material (keeping
+// `keep` meshes separate). A car is ~40 parts; this cuts it to a handful of
+// draw calls in both the main and shadow passes.
+function mergeByMaterial(group, keep = []) {
+  const buckets = new Map();
+  for (const child of [...group.children]) {
+    if (!child.isMesh || keep.includes(child)) continue;
+    child.updateMatrix();
+    const g = child.geometry.clone();
+    g.applyMatrix4(child.matrix);
+    for (const name of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(name)) g.deleteAttribute(name);
+    const key = child.material;
+    if (!buckets.has(key)) buckets.set(key, { geos: [], shadow: false });
+    const b = buckets.get(key);
+    b.geos.push(g);
+    b.shadow ||= child.castShadow;
+    group.remove(child);
+  }
+  for (const [material, { geos, shadow }] of buckets) {
+    const indexed = geos.filter((g) => g.index);
+    const plain = geos.filter((g) => !g.index);
+    for (const list of [indexed, plain]) {
+      if (!list.length) continue;
+      const m = new THREE.Mesh(mergeGeometries(list), material);
+      m.castShadow = shadow;
+      group.add(m);
+    }
+  }
 }
 
 function buildMesh(color) {
@@ -120,6 +151,9 @@ function buildMesh(color) {
     wheels.push(spin);
     if (front) frontPivots.push(pivot);
   }
+
+  mergeByMaterial(body, [flame]);
+  for (const spin of wheels) mergeByMaterial(spin);
 
   return { root, visual, body, wheels, frontPivots, flame };
 }

@@ -206,15 +206,43 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     return h;
   };
 
-  const w = maxX - minX, d = maxZ - minZ;
-  const geo = new THREE.PlaneGeometry(w, d, Math.round(w / cell), Math.round(d / cell));
-  geo.rotateX(-Math.PI / 2);
-  geo.translate((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    pos.setY(i, heightAt(pos.getX(i), pos.getZ(i)));
+  // Grid lines: `cell` spacing over the track area (needed so the terrain
+  // hugs the road), much coarser out in the distant hills.
+  const lines = (lo, hi, innerLo, innerHi) => {
+    const out = [];
+    const coarse = cell * 4;
+    for (let v = lo; v < innerLo; v += coarse) out.push(v);
+    for (let v = innerLo; v < innerHi; v += cell) out.push(v);
+    for (let v = innerHi; v < hi; v += coarse) out.push(v);
+    out.push(hi);
+    return out;
+  };
+  const pad = 70;
+  const xs = lines(minX, maxX, trackBox.min.x - pad, trackBox.max.x + pad);
+  const zs = lines(minZ, maxZ, trackBox.min.z - pad, trackBox.max.z + pad);
+  const positions = new Float32Array(xs.length * zs.length * 3);
+  const uvs = new Float32Array(xs.length * zs.length * 2);
+  let n = 0;
+  for (const z of zs) {
+    for (const x of xs) {
+      positions.set([x, heightAt(x, z), z], n * 3);
+      uvs.set([(x - minX) / 24, (z - minZ) / 24], n * 2);
+      n++;
+    }
   }
+  const indices = [];
+  for (let j = 0; j < zs.length - 1; j++) {
+    for (let i = 0; i < xs.length - 1; i++) {
+      const a = j * xs.length + i, b = a + 1, c = a + xs.length, e = c + 1;
+      indices.push(a, c, b, b, c, e);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
   geo.computeVertexNormals();
+  const pos = geo.attributes.position;
 
   const normal = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
@@ -236,7 +264,6 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
   const tex = speckleTex.clone();
-  tex.repeat.set(w / 24, d / 24);
   const mesh = new THREE.Mesh(geo, toon(0xffffff, { map: tex, vertexColors: true }));
   mesh.receiveShadow = true;
   scene.add(mesh);

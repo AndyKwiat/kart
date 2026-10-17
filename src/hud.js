@@ -60,16 +60,28 @@ export class Hud {
     g.fillRect(sx - 2, sy - 7, 4, 14);
   }
 
-  update({ lap, laps, time, speed, rank, total, wrongWay }) {
-    this.lap.textContent = `LAP ${lap}/${laps}`;
-    this.time.textContent = formatTime(time);
-    this.speed.innerHTML = `${Math.round(Math.max(0, speed) * 2.4)} <span>km/h</span>`;
+  update({ lap, laps, time, speed, rank, wrongWay }) {
+    // Only touch the DOM when something visible changed.
+    const set = (el, key, value, html = false) => {
+      if (this[key] === value) return;
+      this[key] = value;
+      if (html) el.innerHTML = value; else el.textContent = value;
+    };
+    set(this.lap, '_lap', `LAP ${lap}/${laps}`);
+    set(this.time, '_time', formatTime(time));
+    set(this.speed, '_speed', `${Math.round(Math.max(0, speed) * 2.4)} <span>km/h</span>`, true);
     const [n, s] = ordinal(rank);
-    this.pos.innerHTML = `${n}<sup>${s}</sup>`;
-    this.wrong.style.display = wrongWay ? 'block' : 'none';
+    set(this.pos, '_pos', `${n}<sup>${s}</sup>`, true);
+    if (this._wrong !== wrongWay) {
+      this._wrong = wrongWay;
+      this.wrong.style.display = wrongWay ? 'block' : 'none';
+    }
   }
 
   setCenter(text, small = false) {
+    if (this._center === text && this._small === small) return;
+    this._center = text;
+    this._small = small;
     this.center.textContent = text;
     this.center.classList.toggle('small', small);
   }
@@ -105,13 +117,14 @@ export class Hud {
 
   showResults(order, player) {
     this.results.classList.remove('hidden');
-    this.resultsList.innerHTML = order.map((car, i) => `
+    const html = order.map((car, i) => `
       <li class="${car === player ? 'you' : ''}">
         <span class="rank">${i + 1}.</span>
         <span class="swatch" style="background:${hex(car.color)}"></span>
         <span class="name">${car.name}</span>
         <span>${car.finished ? formatTime(car.finishTime) : 'racing…'}</span>
       </li>`).join('');
+    if (html !== this._results) this.resultsList.innerHTML = this._results = html;
   }
 
   hideResults() {
