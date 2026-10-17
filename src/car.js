@@ -12,6 +12,8 @@ const REVERSE_MAX = 14;
 const COAST = 7;
 const STEER_RATE = 2.3;
 const BOOST_MULT = 1.32;
+// Scales how hard a drift swings the car (turn rate, outward slide, visual angle).
+const DRIFT_STRENGTH = 0.7;
 const GRAVITY = 32;
 
 const WHEEL_R = 0.55;
@@ -255,14 +257,14 @@ export class Car {
     let steer = this.steer;
     if (this.drifting) steer = this.driftDir * 0.6 + this.steer * 0.5;
     let yawRate = steer * STEER_RATE * speedFactor * highSpeedDamp * Math.sign(vf);
-    if (this.drifting) yawRate *= 1.2;
+    if (this.drifting) yawRate *= 1.2 * DRIFT_STRENGTH;
     if (this.airborne) yawRate *= 0.35;
     // Banked corners let you carry more speed through the turn.
     else yawRate *= 1 + 1.6 * Math.abs(this.bankSlope);
     this.heading = wrapAngle(this.heading - yawRate * dt);
 
     // Lateral grip: strong normally, loose while drifting (car slides outward).
-    if (this.drifting) vl -= this.driftDir * Math.abs(vf) * 0.45 * dt;
+    if (this.drifting) vl -= this.driftDir * Math.abs(vf) * 0.45 * DRIFT_STRENGTH * dt;
     vl *= Math.exp(-(this.drifting ? 2.5 : 10) * dt);
 
     fx = Math.sin(this.heading); fz = Math.cos(this.heading);
@@ -385,7 +387,7 @@ export class Car {
     this.roll += (rollTarget - this.roll) * Math.min(1, dt * 8);
     this.mesh.rotation.z = this.roll;
 
-    const targetYaw = this.drifting ? -this.driftDir * 0.38 : 0;
+    const targetYaw = this.drifting ? -this.driftDir * 0.38 * DRIFT_STRENGTH : 0;
     this.driftYaw += (targetYaw - this.driftYaw) * Math.min(1, dt * 8);
     p.visual.rotation.y = this.driftYaw;
     p.visual.position.y = this.hopY;

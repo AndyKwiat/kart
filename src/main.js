@@ -98,6 +98,11 @@ const player = new Car(0xe53935, 'You');
 // AI comes mostly from driving well (drift boosts, lines, dash pads).
 player.maxSpeed = 51;
 const cars = [...COLORS.map((c, i) => new Car(c, `CPU ${i + 1}`)), player];
+// Opponent top speeds: CPU 1 is 5% faster than you, CPU 2-4 match you, the
+// rest keep the default top speed but drive with a little less skill.
+cars[0].maxSpeed = player.maxSpeed * 1.05;
+for (const car of cars.slice(1, 4)) car.maxSpeed = player.maxSpeed;
+const FULL_SKILL = new Set(cars.slice(0, 4));
 for (const car of cars) scene.add(car.mesh);
 const drivers = new Map();
 const playerAutopilot = new AIDriver(player, 0.9);
@@ -156,7 +161,9 @@ function resetRace() {
     car.y = track.height[idx];
     car.updateVisual(0);
     if (car !== player) {
-      drivers.set(car, new AIDriver(car, 0.86 + (COLORS.length - slot) * 0.018 + Math.random() * 0.02));
+      // Full skill means the AI actually reaches its top speed on straights.
+      const skill = FULL_SKILL.has(car) ? 1 : 0.86 + (COLORS.length - slot) * 0.018 + Math.random() * 0.02;
+      drivers.set(car, new AIDriver(car, skill));
     }
   });
   camHeading = player.heading;
