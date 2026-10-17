@@ -98,10 +98,9 @@ const player = new Car(0xe53935, 'You');
 // AI comes mostly from driving well (drift boosts, lines, dash pads).
 player.maxSpeed = 51;
 const cars = [...COLORS.map((c, i) => new Car(c, `CPU ${i + 1}`)), player];
-// Opponent top speeds relative to yours: CPU 1 +20%, CPU 2-4 +15%,
-// CPU 5-6 +10%. CPU 7 keeps the default top speed with a little less skill.
-cars[0].maxSpeed = player.maxSpeed * 1.2;
-for (const car of cars.slice(1, 4)) car.maxSpeed = player.maxSpeed * 1.15;
+// Opponent top speeds relative to yours: CPU 1-4 +20%, CPU 5-6 +10%.
+// CPU 7 keeps the default top speed with a little less skill.
+for (const car of cars.slice(0, 4)) car.maxSpeed = player.maxSpeed * 1.2;
 for (const car of cars.slice(4, 6)) car.maxSpeed = player.maxSpeed * 1.1;
 const FULL_SKILL = new Set(cars.slice(0, 6));
 for (const car of cars) scene.add(car.mesh);
