@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toon } from './materials.js';
-import { HALF_WIDTH, CURB_WIDTH, WALL_OFFSET } from './track.js';
+import { CURB_WIDTH } from './track.js';
 
 export const CAR_RADIUS = 1.6;
 
@@ -219,7 +219,7 @@ export class Car {
     this.progress += d;
 
     let lat = track.lateral(this.idx, this.x, this.z);
-    const limit = WALL_OFFSET - CAR_RADIUS + 0.6;
+    const limit = track.wallOffset(this.idx) - CAR_RADIUS + 0.6;
     if (Math.abs(lat) > limit) {
       const r = track.right[this.idx];
       const s = Math.sign(lat);
@@ -236,7 +236,7 @@ export class Car {
       lat = s * limit;
     }
     this.lateral = lat;
-    this.offroad = Math.abs(lat) > HALF_WIDTH + CURB_WIDTH;
+    this.offroad = Math.abs(lat) > track.hw[this.idx] + CURB_WIDTH;
 
     // Vertical: follow the ground unless it falls away faster than a
     // ballistic arc would (e.g. off a ramp lip), then fly until landing.
@@ -265,6 +265,7 @@ export class Car {
         this.y = ground;
       }
     }
+    if (!this.airborne && track.padAt(this.idx, lat)) this.boost = Math.max(this.boost, 0.9);
     const t = track.tan[this.idx];
     this.slope = track.slopeAt(this.idx) * (Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z);
   }

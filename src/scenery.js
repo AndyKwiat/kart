@@ -1,11 +1,10 @@
 import * as THREE from 'three';
 import { toon, canvasTexture } from './materials.js';
-import { WALL_OFFSET } from './track.js';
 
 export function buildScenery(scene, track) {
   const sky = 0x8fd3ff;
   scene.background = new THREE.Color(sky);
-  scene.fog = new THREE.Fog(sky, 180, 650);
+  scene.fog = new THREE.Fog(sky, 220, 820);
 
   scene.add(new THREE.HemisphereLight(0xdff2ff, 0x5d8a3a, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 2.4);
@@ -19,58 +18,73 @@ export function buildScenery(scene, track) {
   sun.shadow.bias = -0.0005;
   scene.add(sun, sun.target);
 
-  // Grass with speckles so speed reads well.
-  const grassTex = canvasTexture(128, 128, (ctx, w, h) => {
-    ctx.fillStyle = '#6cc24a';
+  // Neutral speckle texture; terrain colour comes from vertex colours.
+  const speckleTex = canvasTexture(128, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#d8d8d8';
     ctx.fillRect(0, 0, w, h);
     for (let i = 0; i < 500; i++) {
-      ctx.fillStyle = Math.random() < 0.5 ? '#5fb240' : '#7ad257';
+      ctx.fillStyle = Math.random() < 0.5 ? '#c4c4c4' : '#ececec';
       ctx.fillRect(Math.random() * w, Math.random() * h, 3, 3);
     }
   });
-  grassTex.repeat.set(330, 330);
-  grassTex.anisotropy = 8;
-  const plain = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), toon(0xffffff, { map: grassTex }));
+  speckleTex.anisotropy = 8;
+  const plainTex = speckleTex.clone();
+  plainTex.repeat.set(330, 330);
+  const plain = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), toon(0x7ccf55, { map: plainTex }));
   plain.rotation.x = -Math.PI / 2;
   plain.position.y = -1;
   scene.add(plain);
 
   const box = new THREE.Box3().setFromPoints(track.pos);
-  const center = box.getCenter(new THREE.Vector3());
-  const { heightAt, mesh: terrain } = buildTerrain(scene, track, box, grassTex);
+  const lake = findLake(track, box);
+  const { heightAt, distToTrack, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
 
-  // Trees, kept clear of the track.
-  const distToTrack = (x, z) => {
-    let best = Infinity;
-    for (let i = 0; i < track.N; i += 6) {
-      const p = track.pos[i];
-      best = Math.min(best, (p.x - x) ** 2 + (p.z - z) ** 2);
-    }
-    return Math.sqrt(best);
-  };
-  box.expandByScalar(90);
-  const spots = [];
-  for (let tries = 0; spots.length < 320 && tries < 5000; tries++) {
-    const x = THREE.MathUtils.lerp(box.min.x, box.max.x, Math.random());
-    const z = THREE.MathUtils.lerp(box.min.z, box.max.z, Math.random());
-    if (distToTrack(x, z) > WALL_OFFSET + 5) spots.push([x, z]);
+  if (lake) {
+    const water = new THREE.Mesh(
+      new THREE.CircleGeometry(lake.r * 1.25, 48),
+      toon(0x3a9be0, { transparent: true, opacity: 0.85 }),
+    );
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(lake.x, lake.level, lake.z);
+    water.receiveShadow = true;
+    scene.add(water);
   }
 
-  const trunkGeo = new THREE.CylinderGeometry(0.45, 0.6, 2.4, 6);
-  trunkGeo.translate(0, 1.2, 0);
-  const leafGeo = new THREE.ConeGeometry(2.8, 6.5, 7);
-  leafGeo.translate(0, 5.4, 0);
-  const trunks = new THREE.InstancedMesh(trunkGeo, toon(0x8a5a32), spots.length);
-  const leaves = new THREE.InstancedMesh(leafGeo, toon(0xffffff, { flatShading: true }), spots.length);
+  const inLake = (x, z) => lake && Math.hypot(x - lake.x, z - lake.z) < lake.r * 1.3;
+  const scatter = (count, minD, maxD, maxH, expand) => {
+    const b = box.clone().expandByScalar(expand);
+    const spots = [];
+    for (let tries = 0; spots.length < count && tries < count * 30; tries++) {
+      const x = THREE.MathUtils.lerp(b.min.x, b.max.x, Math.random());
+      const z = THREE.MathUtils.lerp(b.min.z, b.max.z, Math.random());
+      const [, d, wall] = distToTrack(x, z);
+      if (d < wall + minD || d > wall + maxD || inLake(x, z)) continue;
+      const y = heightAt(x, z);
+      if (y > maxH) continue;
+      spots.push([x, y, z]);
+    }
+    return spots;
+  };
+
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3();
   const c = new THREE.Color();
+  const yAxis = new THREE.Vector3(0, 1, 0);
+
+  // Pine trees, kept clear of the track, the lake and the snowline.
+  const trees = scatter(380, 5, 220, 60, 160);
+  const trunkGeo = new THREE.CylinderGeometry(0.45, 0.6, 2.4, 6);
+  trunkGeo.translate(0, 1.2, 0);
+  const leafGeo = new THREE.ConeGeometry(2.8, 6.5, 7);
+  leafGeo.translate(0, 5.4, 0);
+  const trunks = new THREE.InstancedMesh(trunkGeo, toon(0x8a5a32), trees.length);
+  const leaves = new THREE.InstancedMesh(leafGeo, toon(0xffffff, { flatShading: true }), trees.length);
   const greens = [0x2f9e44, 0x3fb34f, 0x26843a, 0x51c45a];
-  spots.forEach(([x, z], i) => {
+  trees.forEach(([x, y, z], i) => {
     const k = 0.7 + Math.random() * 0.7;
-    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI);
-    m.compose(new THREE.Vector3(x, heightAt(x, z) - 0.3, z), q, s.set(k, k, k));
+    q.setFromAxisAngle(yAxis, Math.random() * Math.PI);
+    m.compose(new THREE.Vector3(x, y - 0.3, z), q, s.set(k, k, k));
     trunks.setMatrixAt(i, m);
     leaves.setMatrixAt(i, m);
     leaves.setColorAt(i, c.setHex(greens[i % greens.length]));
@@ -78,34 +92,76 @@ export function buildScenery(scene, track) {
   trunks.castShadow = leaves.castShadow = true;
   scene.add(trunks, leaves);
 
-  // Distant rolling hills.
-  const hillMat = toon(0x4f9e3a);
-  for (let i = 0; i < 18; i++) {
-    const a = (i / 18) * Math.PI * 2 + Math.random() * 0.2;
-    const r = 470 + Math.random() * 80;
-    const hill = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), hillMat);
-    hill.scale.set(70 + Math.random() * 60, 35 + Math.random() * 40, 70 + Math.random() * 60);
-    hill.position.set(center.x + Math.cos(a) * r, -5, center.z + Math.sin(a) * r);
-    scene.add(hill);
-  }
+  // Boulders: a few right behind the walls, more out in the hills.
+  const rocks = [...scatter(70, 1.5, 12, 999, 40), ...scatter(90, 30, 260, 999, 200)];
+  const rockMesh = new THREE.InstancedMesh(
+    new THREE.DodecahedronGeometry(1, 0),
+    toon(0xffffff, { flatShading: true }),
+    rocks.length,
+  );
+  rocks.forEach(([x, y, z], i) => {
+    const k = 0.8 + Math.random() * 2.6;
+    q.setFromEuler(new THREE.Euler(Math.random() * 3, Math.random() * 3, Math.random() * 3));
+    m.compose(new THREE.Vector3(x, y + k * 0.3, z), q, s.set(k * (0.9 + Math.random() * 0.5), k * 0.75, k));
+    rockMesh.setMatrixAt(i, m);
+    const g = 0.5 + Math.random() * 0.2;
+    rockMesh.setColorAt(i, c.setRGB(g, g * 0.97, g * 0.92));
+  });
+  rockMesh.castShadow = true;
+  rockMesh.receiveShadow = true;
+  scene.add(rockMesh);
 
-  return { sun, ground: [terrain, plain] };
+  return { sun, ground: [terrain, plain], lake };
 }
 
-// Rolling grass terrain. Near the track it flattens to the road's height so the
-// road sits on it; further out it blends into free-form hills.
-function buildTerrain(scene, track, trackBox, grassTex) {
-  const margin = 380;
+// Most open spot inside the loop, for a lake.
+function findLake(track, box) {
+  const poly = track.pos;
+  const inside = (x, z) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i++) {
+      const a = poly[i], b = poly[j];
+      if ((a.z > z) !== (b.z > z) && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) c = !c;
+    }
+    return c;
+  };
+  let best = null;
+  for (let x = box.min.x; x <= box.max.x; x += 10) {
+    for (let z = box.min.z; z <= box.max.z; z += 10) {
+      if (!inside(x, z)) continue;
+      let d = Infinity;
+      for (let i = 0; i < track.N; i += 6) {
+        const p = track.pos[i];
+        d = Math.min(d, Math.hypot(p.x - x, p.z - z) - track.wallOffset(i));
+      }
+      if (!best || d > best.d) best = { x, z, d };
+    }
+  }
+  if (!best || best.d < 70) return null;
+  return { x: best.x, z: best.z, r: Math.min(75, best.d - 50), level: 3 };
+}
+
+// Terrain: flat at road height next to the track, blending into hills that
+// grow into rocky, snow-capped mountains far away, with a lake basin inside
+// the loop. Vertex colours paint grass, dark grass, sand, rock and snow.
+function buildTerrain(scene, track, trackBox, speckleTex, lake) {
+  const margin = 520;
   const minX = trackBox.min.x - margin, maxX = trackBox.max.x + margin;
   const minZ = trackBox.min.z - margin, maxZ = trackBox.max.z + margin;
   const cell = 4;
+  const { smoothstep, lerp } = THREE.MathUtils;
 
   const hills = (x, z) =>
     12 * Math.sin(x / 70 + 1) * Math.cos(z / 60 - 0.5) +
     7 * Math.sin((x - z) / 45) +
-    4 * Math.cos((x + 2 * z) / 31) + 12;
+    4 * Math.cos((x + 2 * z) / 31);
+  // Ridged bands for mountain ranges.
+  const ridges = (x, z) =>
+    (1 - Math.abs(Math.sin(x / 95 + Math.cos(z / 130)))) * 40 +
+    (1 - Math.abs(Math.sin(z / 70 - 0.7 + Math.sin(x / 110)))) * 25;
 
-  const nearest = (x, z) => {
+  // [nearest sample, distance to centerline, wall offset there]
+  const distToTrack = (x, z) => {
     let best = 0, bestD = Infinity;
     for (let i = 0; i < track.N; i += 4) {
       const p = track.pos[i];
@@ -117,17 +173,28 @@ function buildTerrain(scene, track, trackBox, grassTex) {
       const d = (p.x - x) ** 2 + (p.z - z) ** 2;
       if (d < bestD) { bestD = d; best = i; }
     }
-    return [best, Math.sqrt(bestD)];
+    return [best, Math.sqrt(bestD), track.wallOffset(best)];
   };
 
   const heightAt = (x, z) => {
-    const [i, d] = nearest(x, z);
-    const w = THREE.MathUtils.smoothstep(d, WALL_OFFSET + 2, WALL_OFFSET + 50);
-    // Fade hills out toward the edge so the terrain meets the flat plain.
+    const [i, d, wall] = distToTrack(x, z);
+    // Under the road use the lowest nearby road height, so the coarse terrain
+    // grid can't poke up through bumps (whoops, ramp bases).
+    let roadH = track.height[i];
+    if (d < track.hw[i] + 3) {
+      for (let k = -6; k <= 6; k++) roadH = Math.min(roadH, track.height[track.wrap(i + k)]);
+    }
+    const w = smoothstep(d, wall + 2, wall + 50);
+    const far = smoothstep(d, 90, 380);
+    let free = hills(x, z) * (1 + far * 1.5) + 12 + far * ridges(x, z) * 1.6;
+    if (lake) {
+      const basin = 1 - smoothstep(Math.hypot(x - lake.x, z - lake.z), lake.r * 0.5, lake.r * 1.4);
+      free = lerp(free, lake.level - 5, basin);
+    }
+    // Fade toward the edge so the terrain meets the flat plain.
     const edge = Math.min(x - minX, maxX - x, z - minZ, maxZ - z);
-    const fade = THREE.MathUtils.smoothstep(edge, 0, 150);
-    const free = THREE.MathUtils.lerp(-1, hills(x, z), fade);
-    return THREE.MathUtils.lerp(track.height[i] - 0.3, free, w);
+    free = lerp(-1, free, smoothstep(edge, 0, 120));
+    return lerp(roadH - 0.3, free, w);
   };
 
   const w = maxX - minX, d = maxZ - minZ;
@@ -140,10 +207,29 @@ function buildTerrain(scene, track, trackBox, grassTex) {
   }
   geo.computeVertexNormals();
 
-  const tex = grassTex.clone();
+  const normal = geo.attributes.normal;
+  const colors = new Float32Array(pos.count * 3);
+  const grass = new THREE.Color(0x6cc24a), darkGrass = new THREE.Color(0x4f9e3a);
+  const sand = new THREE.Color(0xe3d08a), rock = new THREE.Color(0x8b8580), snow = new THREE.Color(0xf6f8ff);
+  const col = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const steep = 1 - normal.getY(i);
+    col.copy(grass).lerp(darkGrass, Math.max(0, smoothstep(y, 15, 40) * 0.8 + 0.2 * Math.sin(x / 23) * Math.cos(z / 19)));
+    if (lake) {
+      const shore = 1 - smoothstep(Math.hypot(x - lake.x, z - lake.z), lake.r * 1.2, lake.r * 1.6);
+      col.lerp(sand, shore * (1 - smoothstep(y, lake.level + 0.6, lake.level + 2.2)));
+    }
+    col.lerp(rock, smoothstep(steep, 0.12, 0.3));
+    col.lerp(snow, smoothstep(y, 75, 90));
+    colors.set([col.r, col.g, col.b], i * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const tex = speckleTex.clone();
   tex.repeat.set(w / 12, d / 12);
-  const mesh = new THREE.Mesh(geo, toon(0xffffff, { map: tex }));
+  const mesh = new THREE.Mesh(geo, toon(0xffffff, { map: tex, vertexColors: true }));
   mesh.receiveShadow = true;
   scene.add(mesh);
-  return { heightAt, mesh };
+  return { heightAt, distToTrack, mesh };
 }

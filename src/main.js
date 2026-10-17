@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Track, HALF_WIDTH } from './track.js';
+import { Track } from './track.js';
 import { Car, collideCars } from './car.js';
 import { AIDriver } from './ai.js';
 import { Hud } from './hud.js';
@@ -104,7 +104,7 @@ function placeCamera(dt, snap = false) {
   const sr = Math.min(1, Math.max(0, player.speed) / player.maxSpeed);
   const back = 6.8 + sr * 1.4;
   // Vertical follow is softer so jumps and landings don't jolt the view.
-  camY = snap ? player.y : camY + (player.y - camY) * (1 - Math.exp(-dt * 6));
+  camY = snap ? player.y : camY + (player.y - camY) * (1 - Math.exp(-dt * (player.y > camY ? 9 : 6)));
   const target = new THREE.Vector3(
     player.x - Math.sin(camHeading) * back,
     camY + 4.3 + player.hopY * 0.3,
@@ -127,6 +127,7 @@ function placeCamera(dt, snap = false) {
 
 function step(dt) {
   clock += dt;
+  track.update(clock);
 
   if (state === 'countdown') {
     const left = COUNTDOWN - clock;
@@ -227,7 +228,7 @@ if (import.meta.env.DEV) {
     const bad = [];
     for (let i = from; i < to; i += step) {
       const p = track.pos[i], r = track.right[i];
-      for (let lat = -HALF_WIDTH + 1; lat <= HALF_WIDTH - 1; lat += 6) {
+      for (let lat = -track.hw[i] + 1; lat <= track.hw[i] - 1; lat += 6) {
         const hit = firstHit(p.x + r.x * lat, p.z + r.z * lat);
         if (hit && hit.object !== track.road) bad.push({ i, lat, over: +(hit.point.y - track.height[i]).toFixed(2) });
       }

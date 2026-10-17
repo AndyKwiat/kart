@@ -1,4 +1,3 @@
-import { HALF_WIDTH } from './track.js';
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -49,12 +48,20 @@ export class AIDriver {
     }
     this.dodge += (dodgeTarget - this.dodge) * Math.min(1, dt * 2);
 
-    const lane = Math.max(-HALF_WIDTH + 3, Math.min(HALF_WIDTH - 3,
-      Math.sin(time * this.weaveFreq + this.phase) * 9 + this.dodge));
-
     const speed = Math.max(0, car.speed);
     const lookahead = 9 + speed * 0.45;
     const ti = track.wrap(car.idx + Math.round(lookahead / track.spacing));
+    const hw = track.hw[ti];
+
+    // Weave across the road (scaled to its width), but line up for an
+    // upcoming dash panel.
+    let lane = Math.sin(time * this.weaveFreq + this.phase) * hw * 0.5;
+    for (const pad of track.pads) {
+      const ahead = track.wrap(pad.at - car.idx) * track.spacing;
+      if (ahead > 0 && ahead < 70) lane = pad.lat;
+    }
+    lane = Math.max(-hw + 3, Math.min(hw - 3, lane + this.dodge));
+
     const tp = track.pos[ti], tr = track.right[ti];
     const tx = tp.x + tr.x * lane, tz = tp.z + tr.z * lane;
     const desired = Math.atan2(tx - car.x, tz - car.z);
