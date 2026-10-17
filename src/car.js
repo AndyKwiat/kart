@@ -106,6 +106,8 @@ export class Car {
     this.y = 0;
     this.slope = 0;
     this.pitch = 0;
+    this.roll = 0;
+    this.bankSlope = 0;
     this.vy = 0;
     this.airborne = false;
     this.squash = 0;
@@ -187,6 +189,8 @@ export class Car {
     let yawRate = steer * STEER_RATE * speedFactor * highSpeedDamp * Math.sign(vf);
     if (this.drifting) yawRate *= 1.2;
     if (this.airborne) yawRate *= 0.35;
+    // Banked corners let you carry more speed through the turn.
+    else yawRate *= 1 + 1.6 * Math.abs(this.bankSlope);
     this.heading = wrapAngle(this.heading - yawRate * dt);
 
     // Lateral grip: strong normally, loose while drifting (car slides outward).
@@ -235,7 +239,28 @@ export class Car {
       }
       lat = s * limit;
     }
+    // Median island: solid, like a low wall down the middle.
+    const iw = track.islandHw[this.idx];
+    if (iw > 0) {
+      const lim = iw + CAR_RADIUS - 0.3;
+      if (Math.abs(lat) < lim) {
+        const r = track.right[this.idx];
+        const s = lat >= 0 ? 1 : -1;
+        const push = lim - Math.abs(lat);
+        this.x += r.x * s * push;
+        this.z += r.z * s * push;
+        const vn = this.vx * r.x + this.vz * r.z;
+        if (vn * s < 0) {
+          this.vx -= r.x * vn * 1.4;
+          this.vz -= r.z * vn * 1.4;
+          this.vx *= 0.96;
+          this.vz *= 0.96;
+        }
+        lat = s * lim;
+      }
+    }
     this.lateral = lat;
+    this.bankSlope = track.bank[this.idx];
     this.offroad = Math.abs(lat) > track.hw[this.idx] + CURB_WIDTH;
 
     // Vertical: follow the ground unless it falls away faster than a
@@ -267,6 +292,7 @@ export class Car {
     }
     if (!this.airborne && track.padAt(this.idx, lat)) this.boost = Math.max(this.boost, 0.9);
     const t = track.tan[this.idx];
+    this.trackTan = t;
     this.slope = track.slopeAt(this.idx) * (Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z);
   }
 
@@ -280,6 +306,11 @@ export class Car {
       : -Math.atan(this.slope);
     this.pitch += (pitchTarget - this.pitch) * Math.min(1, dt * (this.airborne ? 4 : 10));
     this.mesh.rotation.x = this.pitch;
+    const t = this.trackTan;
+    const along = t ? Math.sign(Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z) || 1 : 1;
+    const rollTarget = this.airborne ? 0 : -Math.atan(this.bankSlope * along);
+    this.roll += (rollTarget - this.roll) * Math.min(1, dt * 8);
+    this.mesh.rotation.z = this.roll;
 
     const targetYaw = this.drifting ? -this.driftDir * 0.38 : 0;
     this.driftYaw += (targetYaw - this.driftYaw) * Math.min(1, dt * 8);

@@ -61,6 +61,15 @@ export class AIDriver {
       if (ahead > 0 && ahead < 70) lane = pad.lat;
     }
     lane = Math.max(-hw + 3, Math.min(hw - 3, lane + this.dodge));
+    // Pick a side of the median island when one is coming up.
+    // Once alongside it, stay on the side you're on (even if a pad is on
+    // the other side).
+    const iw = Math.max(track.islandHw[ti], track.islandHw[car.idx]);
+    if (iw > 0) {
+      const beside = track.islandHw[car.idx] > 0;
+      const side = beside ? Math.sign(car.lateral || 1) : Math.sign(lane || car.lateral || 1);
+      lane = Math.sign(lane) === side ? side * Math.max(Math.abs(lane), iw + 4) : side * (iw + 6);
+    }
 
     const tp = track.pos[ti], tr = track.right[ti];
     const tx = tp.x + tr.x * lane, tz = tp.z + tr.z * lane;
@@ -80,7 +89,11 @@ export class AIDriver {
     if (leaderGap > 120) rubber = 1.07;
     else if (leaderGap < -250) rubber = 0.94;
 
-    const targetSpeed = car.maxSpeed * this.skill * rubber * (1 - Math.min(0.42, Math.max(0, bend - 0.25) * 0.5));
+    // Banked corners can be taken faster.
+    const bankAhead = Math.max(Math.abs(track.bank[car.idx]), Math.abs(track.bank[track.wrap(car.idx + Math.round(25 / track.spacing))]));
+    const bankRelief = 1 - Math.min(0.7, bankAhead * 2.5);
+    const penalty = Math.min(0.42, Math.max(0, bend - 0.25) * 0.5) * bankRelief;
+    const targetSpeed = car.maxSpeed * this.skill * rubber * (1 - penalty);
     out.throttle = speed < targetSpeed;
     out.brake = speed > targetSpeed + 5;
     return out;

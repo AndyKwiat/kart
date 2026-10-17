@@ -37,9 +37,23 @@ const FEATURES = [
   { at: 1960, segs: [{ kick: 12, to: 2.5 }, { flat: 10 }, { kick: 10, to: 5 }, { flat: 14 }, { ease: 26, to: 0 }] },
 ];
 
+// Banked corners: the road tilts up toward the outside of the bend
+// (`slope` = rise per unit of lateral distance at full bank).
+const BANK_ZONES = [
+  { from: 815, to: 965, slope: 0.3 },   // hairpin
+  { from: 1370, to: 1450, slope: 0.22 }, // climb to the summit
+];
+
+// Tunnel through a hill over the twisty chicane.
+export const TUNNEL = { from: 1180, to: 1268, height: 10 };
+
+// Grassy median that splits the wide sweeper into two lanes.
+export const ISLAND = { from: 430, to: 610, hw: 5, nose: 28 };
+
 // Dash panels: sample index and lateral offset of the pad centre.
 const PADS = [
   { at: 270, lat: 9 },
+  { at: 520, lat: -14 },
   { at: 960, lat: 0 },
   { at: 1740, lat: -6 },
   { at: 2235, lat: 7 },
@@ -101,6 +115,15 @@ export class Track {
       this.hw.push(hw);
     }
 
+    this.bank = this.computeBank();
+    this.islandHw = [];
+    for (let i = 0; i < this.N; i++) {
+      const { from, to, hw, nose } = ISLAND;
+      const w = i < from || i > to ? 0
+        : THREE.MathUtils.smoothstep(i, from, from + nose) * (1 - THREE.MathUtils.smoothstep(i, to - nose, to));
+      this.islandHw.push(hw * w);
+    }
+
     // Rolling elevation along the loop (integer frequencies keep it periodic).
     this.height = [];
     for (let i = 0; i < this.N; i++) {
@@ -127,8 +150,39 @@ export class Track {
     this.buildStartLine();
     this.buildJumpMarkings();
     this.buildPads();
+    this.buildTunnel();
+    this.buildIsland();
   }
 
+  // Bank slope per sample: tilts up toward the outside of the curve inside
+  // BANK_ZONES, eased in/out and smoothed along the track.
+  computeBank() {
+    const raw = [];
+    for (let i = 0; i < this.N; i++) {
+      let w = 0, slope = 0;
+      for (const z of BANK_ZONES) {
+        const zw = THREE.MathUtils.smoothstep(i, z.from - 30, z.from) * (1 - THREE.MathUtils.smoothstep(i, z.to, z.to + 30));
+        if (zw > w) { w = zw; slope = z.slope; }
+      }
+      if (w === 0) { raw.push(0); continue; }
+      // Which side is the inside of the bend?
+      const a = this.tan[this.wrap(i - 8)], b = this.tan[this.wrap(i + 8)], r = this.right[i];
+      const k = ((b.x - a.x) * r.x + (b.z - a.z) * r.z) / (16 * this.spacing);
+      raw.push(-Math.sign(k) * slope * w * THREE.MathUtils.smoothstep(Math.abs(k), 0.002, 0.01));
+    }
+    const out = [];
+    for (let i = 0; i < this.N; i++) {
+      let sum = 0;
+      for (let k = -12; k <= 12; k++) sum += raw[this.wrap(i + k)];
+      out.push(sum / 25);
+    }
+    return out;
+  }
+
+  // Road surface height at sample i, lateral offset lat (includes banking).
+  roadHeight(i, lat) {
+    return this.height[i] + this.bank[i] * lat;
+  }
   wrap(i) {
     return ((i % this.N) + this.N) % this.N;
   }
@@ -165,7 +219,8 @@ export class Track {
     const p = this.pos[i], t = this.tan[i];
     const f = ((x - p.x) * t.x + (z - p.z) * t.z) / this.spacing;
     const j = this.wrap(i + (f >= 0 ? 1 : -1));
-    return THREE.MathUtils.lerp(this.height[i], this.height[j], Math.min(1, Math.abs(f)));
+    const lat = this.lateral(i, x, z);
+    return THREE.MathUtils.lerp(this.roadHeight(i, lat), this.roadHeight(j, lat), Math.min(1, Math.abs(f)));
   }
 
   slopeAt(i) {
@@ -207,8 +262,8 @@ export class Track {
       const r = this.right[k];
       const a = off(o0, k), b = off(o1, k);
       const v = (n * this.spacing) / vScale;
-      const h = this.height[k] + y;
-      positions.set([p.x + r.x * a, h, p.z + r.z * a, p.x + r.x * b, h, p.z + r.z * b], n * 6);
+      const ha = this.roadHeight(k, a) + y, hb = this.roadHeight(k, b) + y;
+      positions.set([p.x + r.x * a, ha, p.z + r.z * a, p.x + r.x * b, hb, p.z + r.z * b], n * 6);
       normals.set([0, 1, 0, 0, 1, 0], n * 6);
       uvs.set([0, v, 1, v], n * 4);
       if (n < count - 1) {
@@ -238,7 +293,7 @@ export class Track {
       const x = p.x + r.x * o;
       const z = p.z + r.z * o;
       const v = (i * this.spacing) / vScale;
-      const h = this.height[k] - 0.3;
+      const h = this.roadHeight(k, o) - 0.3;
       positions.set([x, h, z, x, h + height + 0.3, z], i * 6);
       uvs.set([0, v, 1, v], i * 4);
       if (i < N) {
@@ -350,6 +405,168 @@ export class Track {
         pad.at - pad.halfSamples, pad.at + pad.halfSamples);
       this.group.add(new THREE.Mesh(geo, mat));
     }
+  }
+
+  // Arched rock tunnel with ceiling lamps and stone portals. The hill around
+  // it comes from the terrain (see scenery.js).
+  buildTunnel() {
+    const { from, to, height: H } = TUNNEL;
+    const M = 16;
+    const ring = (k, grow) => {
+      const W = this.wallOffset(k) + 0.6 + grow;
+      const p = this.pos[k], r = this.right[k];
+      const pts = [];
+      for (let m = 0; m <= M; m++) {
+        const a = (m / M) * Math.PI;
+        const lat = Math.cos(a) * W;
+        pts.push([p.x + r.x * lat, this.roadHeight(k, lat) - 0.4 + Math.sin(a) * (H + grow), p.z + r.z * lat]);
+      }
+      return pts;
+    };
+    const tube = (grow) => {
+      const positions = [];
+      const indices = [];
+      const rows = to - from + 1;
+      for (let n = 0; n < rows; n++) for (const v of ring(this.wrap(from + n), grow)) positions.push(...v);
+      for (let n = 0; n < rows - 1; n++) {
+        for (let m = 0; m < M; m++) {
+          const a = n * (M + 1) + m, b = a + 1, c = a + M + 1, d = c + 1;
+          indices.push(a, c, b, b, c, d);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      g.setIndex(indices);
+      g.computeVertexNormals();
+      return g;
+    };
+    const rock = toon(0x5e5853, { side: THREE.DoubleSide });
+    const inner = new THREE.Mesh(tube(0), rock);
+    inner.castShadow = inner.receiveShadow = true;
+    this.group.add(inner);
+
+    // Portals: stone band between the inner arch and a thicker outer arch.
+    const stone = toon(0xb9b2a6, { side: THREE.DoubleSide, flatShading: true });
+    for (const k of [from, to]) {
+      const a = ring(k, 0), b = ring(k, 3);
+      const positions = [...a.flat(), ...b.flat()];
+      const indices = [];
+      for (let m = 0; m < M; m++) indices.push(m, M + 1 + m, m + 1, m + 1, M + 1 + m, M + 2 + m);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      g.setIndex(indices);
+      g.computeVertexNormals();
+      const portal = new THREE.Mesh(g, stone);
+      portal.castShadow = true;
+      this.group.add(portal);
+    }
+
+    // Darken the floor inside (the sky light alone washes out the shadow),
+    // fading in from each portal.
+    const fade = 10;
+    const shadeGeo = this.flatRibbon((k) => -this.wallOffset(k), (k) => this.wallOffset(k), 0.09, 10, from - 2, to + 2);
+    const alpha = new Float32Array((to - from + 5) * 2 * 4);
+    for (let n = 0; n < to - from + 5; n++) {
+      const t = Math.min(n, to - from + 4 - n) / fade;
+      const a = 0.5 * Math.min(1, Math.max(0, t));
+      alpha.set([0, 0, 0, a, 0, 0, 0, a], n * 8);
+    }
+    shadeGeo.setAttribute('color', new THREE.BufferAttribute(alpha, 4));
+    this.group.add(new THREE.Mesh(shadeGeo, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, depthWrite: false,
+    })));
+
+    const lampGeo = new THREE.BoxGeometry(2.4, 0.25, 0.8);
+    const lampMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
+    for (let k = from + 6; k < to - 3; k += 9) {
+      const i = this.wrap(k);
+      const lamp = new THREE.Mesh(lampGeo, lampMat);
+      const p = this.pos[i];
+      lamp.position.set(p.x, this.roadHeight(i, 0) - 0.4 + H - 0.2, p.z);
+      lamp.rotation.y = this.headingAt(i);
+      this.group.add(lamp);
+    }
+  }
+
+  // Median island: grassy top, curb-striped sides, a few trees and a
+  // chevron board on the leading nose.
+  buildIsland() {
+    const { from, to } = ISLAND;
+    const lift = 0.45;
+    const top = this.flatRibbon((k) => -this.islandHw[k], (k) => this.islandHw[k], lift, 6, from, to);
+    const topMesh = new THREE.Mesh(top, toon(0x5fb240));
+    topMesh.receiveShadow = true;
+    this.group.add(topMesh);
+
+    const curbTex = canvasTexture(2, 2, (ctx) => {
+      ctx.fillStyle = '#ffcc1a'; ctx.fillRect(0, 0, 2, 1);
+      ctx.fillStyle = '#26262b'; ctx.fillRect(0, 1, 2, 1);
+    }, { nearest: true });
+    const sideMat = toon(0xffffff, { map: curbTex, side: THREE.DoubleSide });
+    for (const side of [-1, 1]) {
+      const positions = [], uvs = [], indices = [];
+      for (let n = 0; n <= to - from; n++) {
+        const k = this.wrap(from + n);
+        const lat = side * this.islandHw[k];
+        const p = this.pos[k], r = this.right[k];
+        const x = p.x + r.x * lat, z = p.z + r.z * lat, h = this.roadHeight(k, lat);
+        positions.push(x, h, z, x, h + lift, z);
+        const v = (n * this.spacing) / 3;
+        uvs.push(0, v, 1, v);
+        if (n < to - from) {
+          const a = n * 2;
+          indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      g.setIndex(indices);
+      g.computeVertexNormals();
+      this.group.add(new THREE.Mesh(g, sideMat));
+    }
+
+    const trunkMat = toon(0x8a5a32), leafMat = toon(0x2f9e44, { flatShading: true });
+    for (let k = from + ISLAND.nose + 6; k < to - ISLAND.nose; k += 22) {
+      const p = this.pos[k];
+      const y = this.roadHeight(k, 0) + lift;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 2, 6), trunkMat);
+      trunk.position.set(p.x, y + 1, p.z);
+      const leaf = new THREE.Mesh(new THREE.ConeGeometry(2.4, 5.5, 7), leafMat);
+      leaf.position.set(p.x, y + 4.5, p.z);
+      trunk.castShadow = leaf.castShadow = true;
+      this.group.add(trunk, leaf);
+    }
+
+    const chevron = canvasTexture(64, 32, (ctx, w, h) => {
+      ctx.fillStyle = '#ffcc1a';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#26262b';
+      for (const dir of [-1, 1]) {
+        for (let n = 0; n < 2; n++) {
+          const cx = w / 2 + dir * (10 + n * 12);
+          ctx.beginPath();
+          ctx.moveTo(cx, 4);
+          ctx.lineTo(cx + dir * 7, h / 2);
+          ctx.lineTo(cx, h - 4);
+          ctx.lineTo(cx + dir * 3, h - 4);
+          ctx.lineTo(cx + dir * 10, h / 2);
+          ctx.lineTo(cx + dir * 3, 4);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    });
+    const k = from + Math.round(ISLAND.nose * 0.6);
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(5, 2.2, 0.3), [
+      toon(0x26262b), toon(0x26262b), toon(0x26262b), toon(0x26262b),
+      toon(0xffffff, { map: chevron }), toon(0xffffff, { map: chevron }),
+    ]);
+    const p = this.pos[k];
+    sign.position.set(p.x, this.roadHeight(k, 0) + lift + 1.6, p.z);
+    sign.rotation.y = this.headingAt(k);
+    sign.castShadow = true;
+    this.group.add(sign);
   }
 
   buildStartLine() {

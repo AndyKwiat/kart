@@ -25,6 +25,9 @@ const hud = new Hud(track);
 
 const COLORS = [0x3b6cff, 0x2fc45a, 0xffd21f, 0x9b4dff, 0xff8a1f, 0x1fd6d6, 0xff5fb8];
 const player = new Car(0xe53935, 'You');
+// Slightly lower top speed than before (52) so the player's edge over the
+// AI comes mostly from driving well (drift boosts, lines, dash pads).
+player.maxSpeed = 51;
 const cars = [...COLORS.map((c, i) => new Car(c, `CPU ${i + 1}`)), player];
 for (const car of cars) scene.add(car.mesh);
 const drivers = new Map();

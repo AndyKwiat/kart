@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { toon, canvasTexture } from './materials.js';
+import { TUNNEL } from './track.js';
 
 export function buildScenery(scene, track) {
   const sky = 0x8fd3ff;
@@ -184,6 +185,9 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     if (d < track.hw[i] + 3) {
       for (let k = -6; k <= 6; k++) roadH = Math.min(roadH, track.height[track.wrap(i + k)]);
     }
+    // Follow the road's banking out to the wall.
+    const lat = Math.max(-wall, Math.min(wall, track.lateral(i, x, z)));
+    roadH += track.bank[i] * lat;
     const w = smoothstep(d, wall + 2, wall + 50);
     const far = smoothstep(d, 90, 380);
     let free = hills(x, z) * (1 + far * 1.5) + 12 + far * ridges(x, z) * 1.6;
@@ -194,7 +198,15 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     // Fade toward the edge so the terrain meets the flat plain.
     const edge = Math.min(x - minX, maxX - x, z - minZ, maxZ - z);
     free = lerp(-1, free, smoothstep(edge, 0, 120));
-    return lerp(roadH - 0.3, free, w);
+    let h = lerp(roadH - 0.3, free, w);
+    // Hill over the tunnel: rises right outside the arch, fading at the portals.
+    const tw = smoothstep(i, TUNNEL.from - 4, TUNNEL.from + 4) * (1 - smoothstep(i, TUNNEL.to - 4, TUNNEL.to + 4));
+    if (tw > 0) {
+      const W = wall + 0.6;
+      const mound = track.height[i] + (TUNNEL.height + 5) * smoothstep(d, W + 1, W + 9) * (1 - smoothstep(d, W + 35, W + 110));
+      h = Math.max(h, lerp(h, mound, tw));
+    }
+    return h;
   };
 
   const w = maxX - minX, d = maxZ - minZ;
