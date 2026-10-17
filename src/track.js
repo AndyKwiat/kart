@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { toon, canvasTexture } from './materials.js';
+import { roadTexture, stripeTexture, chevronTexture, padTexture, checkerTexture } from './textures.js';
 
 export const BASE_HALF_WIDTH = 18;
 export const CURB_WIDTH = 1.4;
@@ -332,21 +333,9 @@ export class Track {
   }
 
   buildRoad() {
-    const tex = canvasTexture(128, 128, (ctx, w, h) => {
-      ctx.fillStyle = '#5b5c66';
-      ctx.fillRect(0, 0, w, h);
-      for (let i = 0; i < 900; i++) {
-        const s = 70 + Math.random() * 40;
-        ctx.fillStyle = `rgb(${s},${s},${s + 8})`;
-        ctx.fillRect(Math.random() * w, Math.random() * h, 2, 2);
-      }
-      ctx.fillStyle = '#f2f2f2';
-      ctx.fillRect(3, 0, 4, h);
-      ctx.fillRect(w - 7, 0, 4, h);
-    });
-    tex.anisotropy = 8;
+    const tex = roadTexture();
     const mesh = new THREE.Mesh(
-      this.flatRibbon((k) => -this.hw[k], (k) => this.hw[k], 0.02, 14),
+      this.flatRibbon((k) => -this.hw[k], (k) => this.hw[k], 0.02, 28),
       toon(0xffffff, { map: tex }),
     );
     mesh.receiveShadow = true;
@@ -355,10 +344,7 @@ export class Track {
   }
 
   buildCurbs() {
-    const tex = canvasTexture(2, 2, (ctx) => {
-      ctx.fillStyle = '#e8312a'; ctx.fillRect(0, 0, 2, 1);
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 1, 2, 1);
-    }, { nearest: true });
+    const tex = stripeTexture('#e8312a', '#f6f6f6');
     const mat = toon(0xffffff, { map: tex });
     const sides = [
       [(k) => -this.hw[k] - CURB_WIDTH, (k) => -this.hw[k]],
@@ -372,10 +358,7 @@ export class Track {
   }
 
   buildWalls() {
-    const tex = canvasTexture(2, 2, (ctx) => {
-      ctx.fillStyle = '#2f6fe0'; ctx.fillRect(0, 0, 2, 1);
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 1, 2, 1);
-    }, { nearest: true });
+    const tex = stripeTexture('#2f6fe0', '#f6f6f6', { bevel: false });
     const mat = toon(0xffffff, { map: tex, side: THREE.DoubleSide });
     for (const side of [-1, 1]) {
       const mesh = new THREE.Mesh(this.wallRibbon(side, 1.1, 6), mat);
@@ -386,15 +369,7 @@ export class Track {
 
   // Yellow/black chevrons on each kicker so the jumps read from a distance.
   buildJumpMarkings() {
-    const tex = canvasTexture(64, 64, (ctx, w, h) => {
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          ctx.fillStyle = (y + Math.abs(x - w / 2)) % 32 < 16 ? '#ffcc1a' : '#26262b';
-          ctx.fillRect(x, y, 1, 1);
-        }
-      }
-    });
-    tex.anisotropy = 8;
+    const tex = chevronTexture();
     const mat = toon(0xffffff, { map: tex });
     for (const [a, b] of this.kicks) {
       const mesh = new THREE.Mesh(this.flatRibbon((k) => -this.hw[k], (k) => this.hw[k], 0.04, -9, a, b), mat);
@@ -405,23 +380,9 @@ export class Track {
 
   // Glowing dash panels with scrolling arrows.
   buildPads() {
-    this.padTex = canvasTexture(64, 64, (ctx, w, h) => {
-      ctx.fillStyle = '#ff6a00';
-      ctx.fillRect(0, 0, w, h);
-      ctx.fillStyle = '#ffe14a';
-      for (const y0 of [0, 32]) {
-        ctx.beginPath();
-        ctx.moveTo(8, y0 + 26);
-        ctx.lineTo(32, y0 + 6);
-        ctx.lineTo(56, y0 + 26);
-        ctx.lineTo(56, y0 + 16);
-        ctx.lineTo(32, y0 - 4);
-        ctx.lineTo(8, y0 + 16);
-        ctx.closePath();
-        ctx.fill();
-      }
-    });
-    const mat = new THREE.MeshBasicMaterial({ map: this.padTex });
+    this.padTex = padTexture();
+    // Over-bright so the bloom pass makes the pads glow.
+    const mat = new THREE.MeshBasicMaterial({ map: this.padTex, color: new THREE.Color(2.4, 2.4, 2.4) });
     for (const pad of this.pads) {
       const geo = this.flatRibbon(pad.lat - PAD_HALF_WIDTH, pad.lat + PAD_HALF_WIDTH, 0.07, -PAD_HALF_LENGTH,
         pad.at - pad.halfSamples, pad.at + pad.halfSamples);
@@ -498,7 +459,7 @@ export class Track {
     })));
 
     const lampGeo = new THREE.BoxGeometry(2.4, 0.25, 0.8);
-    const lampMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
+    const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 2.7, 2) });
     for (let k = from + 6; k < to - 3; k += 9) {
       const i = this.wrap(k);
       const lamp = new THREE.Mesh(lampGeo, lampMat);
@@ -519,10 +480,7 @@ export class Track {
     topMesh.receiveShadow = true;
     this.group.add(topMesh);
 
-    const curbTex = canvasTexture(2, 2, (ctx) => {
-      ctx.fillStyle = '#ffcc1a'; ctx.fillRect(0, 0, 2, 1);
-      ctx.fillStyle = '#26262b'; ctx.fillRect(0, 1, 2, 1);
-    }, { nearest: true });
+    const curbTex = stripeTexture('#ffcc1a', '#26262b');
     const sideMat = toon(0xffffff, { map: curbTex, side: THREE.DoubleSide });
     for (const side of [-1, 1]) {
       const positions = [], uvs = [], indices = [];
@@ -559,7 +517,9 @@ export class Track {
       this.group.add(trunk, leaf);
     }
 
-    const chevron = canvasTexture(64, 32, (ctx, w, h) => {
+    const chevron = canvasTexture(256, 128, (ctx) => {
+      ctx.scale(4, 4);
+      const w = 64, h = 32;
       ctx.fillStyle = '#ffcc1a';
       ctx.fillRect(0, 0, w, h);
       ctx.fillStyle = '#26262b';
@@ -591,14 +551,7 @@ export class Track {
   }
 
   buildStartLine() {
-    const checker = canvasTexture(16, 4, (ctx) => {
-      for (let x = 0; x < 16; x++) {
-        for (let y = 0; y < 4; y++) {
-          ctx.fillStyle = (x + y) % 2 ? '#111' : '#fff';
-          ctx.fillRect(x, y, 1, 1);
-        }
-      }
-    }, { nearest: true });
+    const checker = checkerTexture(16, 4);
     checker.wrapS = checker.wrapT = THREE.ClampToEdgeWrapping;
 
     const hw = this.hw[0];

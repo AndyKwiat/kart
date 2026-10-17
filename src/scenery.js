@@ -1,14 +1,14 @@
 import * as THREE from 'three';
-import { toon, canvasTexture } from './materials.js';
+import { toon } from './materials.js';
+import { grassDetailTexture } from './textures.js';
+import { SKY } from './sky.js';
 import { TUNNELS } from './track.js';
 
 export function buildScenery(scene, track) {
-  const sky = 0x8fd3ff;
-  scene.background = new THREE.Color(sky);
-  scene.fog = new THREE.Fog(sky, 220, 820);
+  scene.fog = new THREE.Fog(SKY.horizon.clone(), 260, 1000);
 
   scene.add(new THREE.HemisphereLight(0xdff2ff, 0x5d8a3a, 1.6));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+  const sun = new THREE.DirectionalLight(0xfff4e0, 2.6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera;
@@ -20,17 +20,9 @@ export function buildScenery(scene, track) {
   scene.add(sun, sun.target);
 
   // Neutral speckle texture; terrain colour comes from vertex colours.
-  const speckleTex = canvasTexture(128, 128, (ctx, w, h) => {
-    ctx.fillStyle = '#d8d8d8';
-    ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 500; i++) {
-      ctx.fillStyle = Math.random() < 0.5 ? '#c4c4c4' : '#ececec';
-      ctx.fillRect(Math.random() * w, Math.random() * h, 3, 3);
-    }
-  });
-  speckleTex.anisotropy = 8;
+  const speckleTex = grassDetailTexture();
   const plainTex = speckleTex.clone();
-  plainTex.repeat.set(330, 330);
+  plainTex.repeat.set(160, 160);
   const plain = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), toon(0x7ccf55, { map: plainTex }));
   plain.rotation.x = -Math.PI / 2;
   plain.position.y = -1;
@@ -43,7 +35,10 @@ export function buildScenery(scene, track) {
   if (lake) {
     const water = new THREE.Mesh(
       new THREE.CircleGeometry(lake.r * 1.25, 48),
-      toon(0x3a9be0, { transparent: true, opacity: 0.85 }),
+      new THREE.MeshPhysicalMaterial({
+        color: 0x2f8fd8, roughness: 0.08, metalness: 0, clearcoat: 1,
+        transparent: true, opacity: 0.88, envMapIntensity: 1.2,
+      }),
     );
     water.rotation.x = -Math.PI / 2;
     water.position.set(lake.x, lake.level, lake.z);
@@ -112,7 +107,7 @@ export function buildScenery(scene, track) {
   rockMesh.receiveShadow = true;
   scene.add(rockMesh);
 
-  return { sun, ground: [terrain, plain], lake };
+  return { sun, ground: [terrain, plain], lake, center: box.getCenter(new THREE.Vector3()) };
 }
 
 // Most open spot inside the loop, for a lake.
@@ -241,7 +236,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
   const tex = speckleTex.clone();
-  tex.repeat.set(w / 12, d / 12);
+  tex.repeat.set(w / 24, d / 24);
   const mesh = new THREE.Mesh(geo, toon(0xffffff, { map: tex, vertexColors: true }));
   mesh.receiveShadow = true;
   scene.add(mesh);

@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { toon } from './materials.js';
 import { CURB_WIDTH } from './track.js';
 
 export const CAR_RADIUS = 1.6;
@@ -16,21 +15,36 @@ const GRAVITY = 32;
 
 const WHEEL_R = 0.55;
 
-const wheelGeo = new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.55, 16);
-wheelGeo.rotateZ(Math.PI / 2);
-const hubGeo = new THREE.CylinderGeometry(0.25, 0.25, 0.58, 8);
-hubGeo.rotateZ(Math.PI / 2);
-const wheelMat = toon(0x222226);
-const hubMat = toon(0xd8d8d8);
-const glassMat = toon(0x2b3a55);
-const darkMat = toon(0x333338);
-const lightMat = new THREE.MeshBasicMaterial({ color: 0xfff3a0 });
-const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa020, transparent: true, opacity: 0.9 });
-const sparkMats = {
-  small: new THREE.MeshBasicMaterial({ color: 0xffffff }),
-  blue: new THREE.MeshBasicMaterial({ color: 0x3fb8ff }),
-  orange: new THREE.MeshBasicMaterial({ color: 0xff8a1f }),
-};
+// Glossy "toy car" materials: clear-coated paint and chrome pick up the sky
+// environment map for specular highlights; lights are over-bright so the bloom
+// pass makes them glow.
+const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1c20, roughness: 0.85 });
+const chromeMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd4, metalness: 1, roughness: 0.18 });
+const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x2a2c33, metalness: 0.6, roughness: 0.35 });
+const glassMat = new THREE.MeshPhysicalMaterial({
+  color: 0x1d2c4a, metalness: 0.1, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.02,
+});
+const stripeMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.1 });
+const headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 2.9, 2.4) });
+const tailMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 0.15, 0.1) });
+const flameMat = new THREE.MeshBasicMaterial({
+  color: new THREE.Color(3, 1.4, 0.3), transparent: true, opacity: 0.85,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+
+const paintMat = (color) => new THREE.MeshPhysicalMaterial({
+  color, metalness: 0.15, roughness: 0.4, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 0.9,
+});
+
+const tireGeo = new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.56, 28);
+tireGeo.rotateZ(Math.PI / 2);
+const sidewallGeo = new THREE.TorusGeometry(WHEEL_R - 0.06, 0.07, 8, 28);
+sidewallGeo.rotateY(Math.PI / 2);
+const rimGeo = new THREE.CylinderGeometry(0.33, 0.33, 0.6, 20);
+rimGeo.rotateZ(Math.PI / 2);
+const capGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.64, 12);
+capGeo.rotateZ(Math.PI / 2);
+const spokeGeo = new THREE.BoxGeometry(0.62, 0.07, 0.5);
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -45,34 +59,50 @@ function buildMesh(color) {
   root.add(visual);
   visual.add(body);
 
-  const paint = toon(color);
-  const add = (parent, geo, mat, x, y, z, shadow = true) => {
+  const paint = paintMat(color);
+  const add = (parent, geo, mat, x, y, z, { shadow = true, rx = 0, ry = 0, rz = 0 } = {}) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
     m.castShadow = shadow;
     parent.add(m);
     return m;
   };
+  const rbox = (w, h, d, r, seg = 4) => new RoundedBoxGeometry(w, h, d, seg, r);
 
-  add(body, new RoundedBoxGeometry(2.3, 0.65, 3.8, 3, 0.28), paint, 0, 0.72, 0);
-  add(body, new RoundedBoxGeometry(1.7, 0.7, 1.7, 3, 0.3), glassMat, 0, 1.3, -0.35);
-  add(body, new RoundedBoxGeometry(1.78, 0.2, 1.5, 2, 0.08), paint, 0, 1.66, -0.35);
-  add(body, new THREE.BoxGeometry(2.0, 0.28, 0.3), darkMat, 0, 0.5, 1.92);
-  add(body, new THREE.BoxGeometry(2.4, 0.12, 0.55), paint, 0, 1.38, -1.72);
-  for (const s of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.12, 0.35, 0.25), darkMat, s * 0.8, 1.17, -1.72);
-    add(body, new THREE.BoxGeometry(0.45, 0.22, 0.1), lightMat, s * 0.68, 0.82, 1.9, false);
+  // Body: low tub, sloped nose, bulging fenders, bubble cabin.
+  add(body, rbox(2.15, 0.5, 3.9, 0.22), paint, 0, 0.62, 0);
+  add(body, rbox(1.9, 0.36, 1.55, 0.17), paint, 0, 0.92, 1.0, { rx: 0.13 });
+  add(body, rbox(2.0, 0.42, 1.3, 0.2), paint, 0, 0.92, -1.25);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) add(body, rbox(0.72, 0.5, 1.3, 0.24), paint, sx * 1.16, 0.92, sz * 1.25);
+  }
+  add(body, rbox(1.56, 0.74, 1.7, 0.34, 5), glassMat, 0, 1.3, -0.3);
+  add(body, rbox(1.62, 0.16, 1.35, 0.07), paint, 0, 1.68, -0.36);
+
+  // Racing stripe over hood and roof.
+  add(body, rbox(0.42, 0.04, 1.45, 0.02, 2), stripeMat, 0, 1.115, 1.0, { rx: 0.13, shadow: false });
+  add(body, rbox(0.42, 0.04, 1.3, 0.02, 2), stripeMat, 0, 1.77, -0.36, { shadow: false });
+
+  // Chrome bumper, dark grille, exhausts.
+  add(body, rbox(2.0, 0.24, 0.26, 0.11), chromeMat, 0, 0.48, 1.98);
+  add(body, rbox(1.2, 0.18, 0.08, 0.04, 2), darkMetalMat, 0, 0.74, 1.9, { shadow: false });
+  add(body, rbox(1.9, 0.22, 0.24, 0.1), chromeMat, 0, 0.48, -1.98);
+  for (const sx of [-1, 1]) {
+    add(body, new THREE.CylinderGeometry(0.12, 0.14, 0.34, 14), chromeMat, sx * 0.5, 0.56, -2.04, { rx: Math.PI / 2, shadow: false });
+    add(body, new THREE.CylinderGeometry(0.19, 0.19, 0.08, 18), headMat, sx * 0.62, 0.86, 1.82, { rx: Math.PI / 2 - 0.13, shadow: false });
+    add(body, rbox(0.42, 0.16, 0.06, 0.03, 2), tailMat, sx * 0.65, 0.9, -1.92, { shadow: false });
   }
 
-  const flame = add(body, new THREE.ConeGeometry(0.28, 1.4, 8), flameMat, 0, 0.6, -2.5, false);
-  flame.rotation.x = -Math.PI / 2;
-  flame.visible = false;
+  // Wing on chrome struts.
+  add(body, rbox(2.45, 0.1, 0.62, 0.05, 2), paint, 0, 1.48, -1.75);
+  for (const sx of [-1, 1]) {
+    add(body, rbox(0.1, 0.26, 0.5, 0.04, 2), paint, sx * 1.2, 1.44, -1.78);
+    add(body, new THREE.CylinderGeometry(0.05, 0.05, 0.4, 8), chromeMat, sx * 0.6, 1.24, -1.7);
+  }
 
-  const sparks = [-1, 1].map((s) => {
-    const m = add(visual, new THREE.IcosahedronGeometry(0.22, 0), sparkMats.small, s * 1.25, 0.2, -1.8, false);
-    m.visible = false;
-    return m;
-  });
+  const flame = add(body, new THREE.ConeGeometry(0.26, 1.3, 10), flameMat, 0, 0.48, -2.85, { rx: -Math.PI / 2, shadow: false });
+  flame.visible = false;
 
   const wheels = [];
   const frontPivots = [];
@@ -81,14 +111,17 @@ function buildMesh(color) {
     pivot.position.set(x, WHEEL_R, z);
     const spin = new THREE.Group();
     pivot.add(spin);
-    add(spin, wheelGeo, wheelMat, 0, 0, 0);
-    add(spin, hubGeo, hubMat, 0, 0, 0, false);
+    add(spin, tireGeo, tireMat, 0, 0, 0);
+    add(spin, sidewallGeo, tireMat, Math.sign(x) * 0.28, 0, 0, { shadow: false });
+    add(spin, rimGeo, chromeMat, 0, 0, 0, { shadow: false });
+    add(spin, capGeo, darkMetalMat, 0, 0, 0, { shadow: false });
+    for (let k = 0; k < 3; k++) add(spin, spokeGeo, darkMetalMat, 0, 0, 0, { rx: (k / 3) * Math.PI, shadow: false });
     visual.add(pivot);
     wheels.push(spin);
     if (front) frontPivots.push(pivot);
   }
 
-  return { root, visual, body, wheels, frontPivots, flame, sparks };
+  return { root, visual, body, wheels, frontPivots, flame };
 }
 
 export class Car {
@@ -98,6 +131,7 @@ export class Car {
     this.parts = buildMesh(color);
     this.mesh = this.parts.root;
     this.mesh.rotation.order = 'YXZ';
+    this.impacts = []; // wall/car hits this frame, drained by the effects code
     this.maxSpeed = MAX_SPEED;
   }
 
@@ -236,6 +270,10 @@ export class Car {
         this.vz -= r.z * vn * 1.4;
         this.vx *= 0.96;
         this.vz *= 0.96;
+        // Scrape point on the wall, for sparks.
+        if (Math.abs(vn) > 2) {
+          this.impacts.push({ x: this.x + r.x * s * CAR_RADIUS, y: this.y + 0.6, z: this.z + r.z * s * CAR_RADIUS, strength: Math.abs(vn) });
+        }
       }
       lat = s * limit;
     }
@@ -275,6 +313,7 @@ export class Car {
         this.vy = 0;
         this.airborne = false;
         this.squash = Math.min(1, impact / 14);
+        this.landed = impact;
         const keep = 1 - 0.08 * this.squash;
         this.vx *= keep;
         this.vz *= keep;
@@ -332,15 +371,10 @@ export class Car {
     p.flame.visible = this.boost > 0;
     if (p.flame.visible) p.flame.scale.setScalar(0.8 + Math.random() * 0.5);
 
-    const charge = this.driftTime > 1.7 ? 'orange' : this.driftTime > 0.85 ? 'blue' : 'small';
-    for (const s of p.sparks) {
-      s.visible = this.drifting;
-      s.material = sparkMats[charge];
-      s.scale.setScalar((charge === 'small' ? 0.6 : 1.1) * (0.7 + Math.random() * 0.6));
-    }
   }
 }
 
+// Pushes cars apart; records contact points on both cars for sparks.
 export function collideCars(cars) {
   const minD = CAR_RADIUS * 2;
   for (let i = 0; i < cars.length; i++) {
@@ -356,6 +390,10 @@ export function collideCars(cars) {
       b.x += nx * overlap; b.z += nz * overlap;
       const rv = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
       if (rv < 0) {
+        if (rv < -3) {
+          const hit = { x: a.x + nx * CAR_RADIUS, y: (a.y + b.y) / 2 + 0.7, z: a.z + nz * CAR_RADIUS, strength: -rv };
+          a.impacts.push(hit);
+        }
         const jImp = (-(1 + 0.3) * rv) / 2;
         a.vx -= nx * jImp; a.vz -= nz * jImp;
         b.vx += nx * jImp; b.vz += nz * jImp;

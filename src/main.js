@@ -4,23 +4,52 @@ import { Car, collideCars } from './car.js';
 import { AIDriver } from './ai.js';
 import { Hud } from './hud.js';
 import { buildScenery } from './scenery.js';
+import { Sky, SKY } from './sky.js';
+import { Effects } from './fx.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 const LAPS = 3;
 const COUNTDOWN = 3;
 
+const pixelRatio = Math.min(window.devicePixelRatio, 2);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(pixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 1500);
+const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 2400);
 
 const track = new Track();
 scene.add(track.group);
-const { sun, ground } = buildScenery(scene, track);
+const { sun, ground, center } = buildScenery(scene, track);
+const sky = new Sky(scene, renderer, center);
+const effects = new Effects(scene);
+
+// Render through a multisampled HDR target so emissive things (lights, pads,
+// sparks, boost flames) can bloom.
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.setPixelRatio(pixelRatio);
+composer.setSize(window.innerWidth, window.innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.45, 1.6));
+composer.addPass(new OutputPass());
+
+const shakeOffset = new THREE.Vector3();
+function render() {
+  const s = effects.shake;
+  shakeOffset.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+  camera.position.add(shakeOffset);
+  sky.update(0, camera);
+  effects.setScale((window.innerHeight * pixelRatio) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)));
+  composer.render();
+  camera.position.sub(shakeOffset);
+}
 const hud = new Hud(track);
 
 const COLORS = [0x3b6cff, 0x2fc45a, 0xffd21f, 0x9b4dff, 0xff8a1f, 0x1fd6d6, 0xff5fb8];
@@ -65,6 +94,7 @@ let camHeading = 0;
 let camY = 0;
 let finishShownAt = 0;
 let autopilot = false; // dev: AI drives the player car
+let paused = false; // dev: freeze for close-ups
 
 function resetRace() {
   state = 'countdown';
@@ -124,7 +154,7 @@ function placeCamera(dt, snap = false) {
   camera.fov += (fov - camera.fov) * Math.min(1, dt * 4);
   camera.updateProjectionMatrix();
 
-  sun.position.set(player.x + 60, player.y + 110, player.z + 40);
+  sun.position.copy(SKY.sunDir).multiplyScalar(150).add(player.mesh.position);
   sun.target.position.set(player.x, player.y, player.z);
 }
 
@@ -167,6 +197,12 @@ function step(dt) {
     }
   }
 
+  for (const car of cars) {
+    const near = car === player || camera.position.distanceToSquared(car.mesh.position) < 140 * 140;
+    effects.car(car, dt, near, car === player);
+  }
+  effects.update(dt);
+
   const lap = Math.min(LAPS, Math.max(1, Math.floor(player.progress / track.N) + 1));
   if (state === 'race' && lap !== lastLap && lap > lastLap) {
     hud.flash(lap === LAPS ? 'FINAL LAP!' : `LAP ${lap}`, clock);
@@ -199,9 +235,12 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   // Two substeps keep collisions stable at low frame rates.
-  step(dt / 2);
-  step(dt / 2);
-  renderer.render(scene, camera);
+  if (!paused) {
+    step(dt / 2);
+    step(dt / 2);
+    sky.update(dt, camera);
+    render();
+  }
   requestAnimationFrame(frame);
 }
 
@@ -209,6 +248,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 resetRace();
@@ -261,7 +301,7 @@ if (import.meta.env.DEV) {
     const log = [];
     for (let n = 0; n < shots; n++) {
       for (let t = 0; t < every; t += 1 / 120) step(1 / 120);
-      renderer.render(scene, camera);
+      render();
       const x = (n % cols) * w, y = Math.floor(n / cols) * h;
       ctx.drawImage(renderer.domElement, x, y, w, h);
       const hit = firstHit(player.x, player.z);
@@ -284,5 +324,15 @@ if (import.meta.env.DEV) {
     return log;
   };
 
-  window.__kart = { cars, player, track, step, groundCheck, tour, setAutopilot: (on) => { autopilot = on; } };
+  // __kart.closeup(car): freeze the loop and frame a beauty shot of a car.
+  const closeup = (car = cars[0], angle = 2.4, dist = 7, height = 2.2) => {
+    paused = true;
+    const p = car.mesh.position;
+    camera.position.set(p.x + Math.sin(car.heading + angle) * dist, p.y + height, p.z + Math.cos(car.heading + angle) * dist);
+    camera.lookAt(p.x, p.y + 0.8, p.z);
+    camera.fov = 45;
+    camera.updateProjectionMatrix();
+    render();
+  };
+  window.__kart = { cars, player, track, step, render, effects, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
 }

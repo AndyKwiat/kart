@@ -18,6 +18,7 @@ export function canvasTexture(w, h, draw, { nearest = false } = {}) {
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 16; // clamped to the GPU's maximum
   if (nearest) {
     tex.minFilter = THREE.NearestFilter;
     tex.magFilter = THREE.NearestFilter;
