@@ -7,10 +7,14 @@ export const RUNOFF = 8; // grass between the curb and the wall
 
 const SCALE = 1.6;
 // Closed loop of control points (x, z). Starts on the top straight heading +x.
+// The eastern half is the original circuit; from [-200, 0] the road heads
+// out on a big western loop and comes back to the start straight.
 const CONTROL = [
   [-60, 100], [40, 100], [120, 80], [170, 20], [160, -50], [110, -80],
   [60, -50], [20, -20], [-30, -40], [-60, -100], [-120, -120],
-  [-180, -80], [-200, 0], [-150, 80],
+  [-180, -80], [-200, 0],
+  [-240, 60], [-320, 80], [-400, 40], [-480, 70], [-520, 160], [-490, 260],
+  [-420, 330], [-310, 370], [-200, 350], [-130, 280], [-165, 190], [-135, 118],
 ];
 
 // Road width zones (sample indices). Width eases in and out over BLEND samples.
@@ -20,7 +24,11 @@ const WIDTH_ZONES = [
   { from: 860, to: 940, hw: 15 },   // hairpin
   { from: 1110, to: 1290, hw: 11 }, // narrow technical chicane
   { from: 1480, to: 1610, hw: 12.5 }, // mountain pass over the summit
-  { from: 2120, to: 2260, hw: 21 }, // wide run to the finish
+  { from: 2280, to: 2520, hw: 12.5 }, // western esses
+  { from: 2600, to: 3050, hw: 22 },   // wide valley sweeper
+  { from: 4080, to: 4240, hw: 15 },   // valley hairpin
+  { from: 4370, to: 4510, hw: 13 },   // second tunnel
+  { from: 4600, to: 4690, hw: 21 },   // wide run to the finish
 ];
 
 // Elevation features layered on the rolling hills. Each is a list of segments
@@ -33,8 +41,11 @@ const WIDTH_ZONES = [
 const FEATURES = [
   { at: 140, segs: [{ kick: 14, to: 3 }, { flat: 16 }, { ease: 22, to: 0 }] },
   { at: 990, segs: [{ kick: 20, to: 4 }, { flat: 18 }, { ease: 26, to: 0 }] },
-  { at: 1790, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
+  { at: 1789, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
   { at: 1960, segs: [{ kick: 12, to: 2.5 }, { flat: 10 }, { kick: 10, to: 5 }, { flat: 14 }, { ease: 26, to: 0 }] },
+  { at: 3150, segs: [{ kick: 16, to: 3.5 }, { flat: 16 }, { ease: 24, to: 0 }] },
+  { at: 3420, segs: [{ whoops: 70, count: 7, height: 1.3 }] },
+  { at: 3700, segs: [{ kick: 22, to: 5 }, { flat: 22 }, { ease: 30, to: 0 }] }, // mega jump
 ];
 
 // Banked corners: the road tilts up toward the outside of the bend
@@ -42,10 +53,15 @@ const FEATURES = [
 const BANK_ZONES = [
   { from: 815, to: 965, slope: 0.3 },   // hairpin
   { from: 1370, to: 1450, slope: 0.22 }, // climb to the summit
+  { from: 2560, to: 2800, slope: 0.15 }, // valley sweeper entry
+  { from: 4080, to: 4240, slope: 0.3 },  // valley hairpin
 ];
 
-// Tunnel through a hill over the twisty chicane.
-export const TUNNEL = { from: 1180, to: 1268, height: 10 };
+// Tunnels through hills: over the twisty chicane and the final S-bends.
+export const TUNNELS = [
+  { from: 1180, to: 1268, height: 10 },
+  { from: 4390, to: 4490, height: 10 },
+];
 
 // Grassy median that splits the wide sweeper into two lanes.
 export const ISLAND = { from: 430, to: 610, hw: 5, nose: 28 };
@@ -56,7 +72,9 @@ const PADS = [
   { at: 520, lat: -14 },
   { at: 960, lat: 0 },
   { at: 1740, lat: -6 },
-  { at: 2235, lat: 7 },
+  { at: 3120, lat: 0 },
+  { at: 3600, lat: -8 },
+  { at: 4640, lat: 7 },
 ];
 export const PAD_HALF_LENGTH = 4;
 export const PAD_HALF_WIDTH = 2.6;
@@ -128,11 +146,10 @@ export class Track {
     this.height = [];
     for (let i = 0; i < this.N; i++) {
       const u = (i / this.N) * Math.PI * 2;
-      this.height.push(7 * Math.sin(u * 2 + 0.6) + 5 * Math.sin(u * 3 + 2.1) + 3 * Math.sin(u * 5 + 0.3));
+      // Frequencies are per lap; doubled when the lap doubled in length so the
+      // hills keep the same spacing.
+      this.height.push(7 * Math.sin(u * 4 + 0.6) + 5 * Math.sin(u * 6 + 2.1) + 3 * Math.sin(u * 10 + 0.3));
     }
-    // Keep the lowest valley above the flat backdrop plane at y = -1.
-    const lowest = Math.min(...this.height);
-    for (let i = 0; i < this.N; i++) this.height[i] += 2 - lowest;
 
     this.kicks = [];
     for (const f of FEATURES) {
@@ -140,6 +157,11 @@ export class Track {
       heights.forEach((h, k) => { this.height[this.wrap(f.at + k)] += h; });
       for (const [a, b] of kicks) this.kicks.push([f.at + a, f.at + b]);
     }
+    // Keep the lowest point (including the low side of banked corners) above
+    // the flat backdrop plane at y = -1.
+    let lowest = Infinity;
+    for (let i = 0; i < this.N; i++) lowest = Math.min(lowest, this.height[i] - Math.abs(this.bank[i]) * this.wallOffset(i));
+    for (let i = 0; i < this.N; i++) this.height[i] += 2 - lowest;
 
     this.pads = PADS.map((p) => ({ ...p, halfSamples: Math.round(PAD_HALF_LENGTH / this.spacing) }));
 
@@ -150,7 +172,7 @@ export class Track {
     this.buildStartLine();
     this.buildJumpMarkings();
     this.buildPads();
-    this.buildTunnel();
+    for (const t of TUNNELS) this.buildTunnel(t);
     this.buildIsland();
   }
 
@@ -409,8 +431,7 @@ export class Track {
 
   // Arched rock tunnel with ceiling lamps and stone portals. The hill around
   // it comes from the terrain (see scenery.js).
-  buildTunnel() {
-    const { from, to, height: H } = TUNNEL;
+  buildTunnel({ from, to, height: H }) {
     const M = 16;
     const ring = (k, grow) => {
       const W = this.wallOffset(k) + 0.6 + grow;

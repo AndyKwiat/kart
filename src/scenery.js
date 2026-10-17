@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { toon, canvasTexture } from './materials.js';
-import { TUNNEL } from './track.js';
+import { TUNNELS } from './track.js';
 
 export function buildScenery(scene, track) {
   const sky = 0x8fd3ff;
@@ -74,7 +74,7 @@ export function buildScenery(scene, track) {
   const yAxis = new THREE.Vector3(0, 1, 0);
 
   // Pine trees, kept clear of the track, the lake and the snowline.
-  const trees = scatter(380, 5, 220, 60, 160);
+  const trees = scatter(700, 5, 220, 60, 160);
   const trunkGeo = new THREE.CylinderGeometry(0.45, 0.6, 2.4, 6);
   trunkGeo.translate(0, 1.2, 0);
   const leafGeo = new THREE.ConeGeometry(2.8, 6.5, 7);
@@ -94,7 +94,7 @@ export function buildScenery(scene, track) {
   scene.add(trunks, leaves);
 
   // Boulders: a few right behind the walls, more out in the hills.
-  const rocks = [...scatter(70, 1.5, 12, 999, 40), ...scatter(90, 30, 260, 999, 200)];
+  const rocks = [...scatter(140, 1.5, 12, 999, 40), ...scatter(160, 30, 260, 999, 200)];
   const rockMesh = new THREE.InstancedMesh(
     new THREE.DodecahedronGeometry(1, 0),
     toon(0xffffff, { flatShading: true }),
@@ -146,7 +146,7 @@ function findLake(track, box) {
 // grow into rocky, snow-capped mountains far away, with a lake basin inside
 // the loop. Vertex colours paint grass, dark grass, sand, rock and snow.
 function buildTerrain(scene, track, trackBox, speckleTex, lake) {
-  const margin = 520;
+  const margin = 450;
   const minX = trackBox.min.x - margin, maxX = trackBox.max.x + margin;
   const minZ = trackBox.min.z - margin, maxZ = trackBox.max.z + margin;
   const cell = 4;
@@ -164,12 +164,12 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   // [nearest sample, distance to centerline, wall offset there]
   const distToTrack = (x, z) => {
     let best = 0, bestD = Infinity;
-    for (let i = 0; i < track.N; i += 4) {
+    for (let i = 0; i < track.N; i += 12) {
       const p = track.pos[i];
       const d = (p.x - x) ** 2 + (p.z - z) ** 2;
       if (d < bestD) { bestD = d; best = i; }
     }
-    for (let k = -4; k <= 4; k++) {
+    for (let k = -12; k <= 12; k++) {
       const i = track.wrap(best + k), p = track.pos[i];
       const d = (p.x - x) ** 2 + (p.z - z) ** 2;
       if (d < bestD) { bestD = d; best = i; }
@@ -200,11 +200,13 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     free = lerp(-1, free, smoothstep(edge, 0, 120));
     let h = lerp(roadH - 0.3, free, w);
     // Hill over the tunnel: rises right outside the arch, fading at the portals.
-    const tw = smoothstep(i, TUNNEL.from - 4, TUNNEL.from + 4) * (1 - smoothstep(i, TUNNEL.to - 4, TUNNEL.to + 4));
-    if (tw > 0) {
-      const W = wall + 0.6;
-      const mound = track.height[i] + (TUNNEL.height + 5) * smoothstep(d, W + 1, W + 9) * (1 - smoothstep(d, W + 35, W + 110));
-      h = Math.max(h, lerp(h, mound, tw));
+    for (const t of TUNNELS) {
+      const tw = smoothstep(i, t.from - 4, t.from + 4) * (1 - smoothstep(i, t.to - 4, t.to + 4));
+      if (tw > 0) {
+        const W = wall + 0.6;
+        const mound = roadH - 0.3 + (t.height + 5) * smoothstep(d, W + 1, W + 9) * (1 - smoothstep(d, W + 35, W + 110));
+        h = Math.max(h, lerp(h, mound, tw));
+      }
     }
     return h;
   };
