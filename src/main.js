@@ -6,6 +6,7 @@ import { Hud } from './hud.js';
 import { buildScenery } from './scenery.js';
 import { Sky, SKY } from './sky.js';
 import { Effects } from './fx.js';
+import { Wildlife } from './animals.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -29,9 +30,11 @@ const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerH
 
 const track = new Track();
 scene.add(track.group);
-const { sun, ground, center } = buildScenery(scene, track);
+const world = buildScenery(scene, track);
+const { sun, ground, center } = world;
 const sky = new Sky(scene, renderer, center);
 const effects = new Effects(scene);
+const wildlife = new Wildlife(scene, world, track);
 
 // Render through an HDR target so emissive things (lights, pads, sparks, boost
 // flames) can bloom. Anti-aliasing is FXAA at the end: 4x MSAA on the HDR
@@ -289,6 +292,7 @@ function frame(now) {
     step(dt / 2);
     step(dt / 2);
     effects.update(dt);
+    wildlife.update(dt, cars);
     sky.update(dt, camera);
     updateHud();
     render();
@@ -388,5 +392,5 @@ if (import.meta.env.DEV) {
     camera.updateProjectionMatrix();
     render();
   };
-  window.__kart = { cars, player, track, step, render, effects, renderer, composer, scene, camera, hud, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
+  window.__kart = { cars, player, track, step, render, effects, wildlife, renderer, composer, scene, camera, hud, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
 }

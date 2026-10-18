@@ -29,7 +29,7 @@ export function buildScenery(scene, track) {
 
   const box = new THREE.Box3().setFromPoints(track.pos);
   const lake = findLake(track, box);
-  const { heightAt, distToTrack, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
+  const { heightAt, distToTrack, groundY, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
 
   if (lake) {
     const water = new THREE.Mesh(
@@ -106,7 +106,21 @@ export function buildScenery(scene, track) {
   rockMesh.receiveShadow = true;
   scene.add(rockMesh);
 
-  return { sun, ground: [terrain, plain], lake, center: box.getCenter(new THREE.Vector3()) };
+  // Where grazing animals may stand: grass, off the track, out of the lake,
+  // below the rocky/snowy heights and not too steep.
+  const pasture = (x, z) => {
+    const [, d, wall] = distToTrack(x, z);
+    if (d < wall + 8 || d > wall + 260 || inLake(x, z)) return false;
+    const y = groundY(x, z);
+    if (y > 55) return false;
+    const slope = Math.abs(groundY(x + 2, z) - y) + Math.abs(groundY(x, z + 2) - y);
+    return slope < 1.2;
+  };
+
+  return {
+    sun, ground: [terrain, plain], lake, center: box.getCenter(new THREE.Vector3()),
+    groundY, distToTrack, pasture, box,
+  };
 }
 
 // Most open spot inside the loop, for a lake.
@@ -269,5 +283,25 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   const mesh = new THREE.Mesh(geo, toon(0xffffff, { map: tex, vertexColors: true }));
   mesh.receiveShadow = true;
   scene.add(mesh);
-  return { heightAt, distToTrack, mesh };
+  // Fast exact height of the terrain mesh surface at (x, z): find the grid
+  // cell by binary search and interpolate within the same triangle split the
+  // mesh uses. Used by animals every frame.
+  const find = (arr, v) => {
+    let lo = 0, hi = arr.length - 2;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (arr[mid] <= v) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  };
+  const groundY = (x, z) => {
+    x = Math.min(Math.max(x, xs[0]), xs[xs.length - 1]);
+    z = Math.min(Math.max(z, zs[0]), zs[zs.length - 1]);
+    const i = find(xs, x), j = find(zs, z);
+    const fx = (x - xs[i]) / (xs[i + 1] - xs[i]), fz = (z - zs[j]) / (zs[j + 1] - zs[j]);
+    const H = (ii, jj) => positions[(jj * xs.length + ii) * 3 + 1];
+    const a = H(i, j), b = H(i + 1, j), c = H(i, j + 1), e = H(i + 1, j + 1);
+    return fx + fz <= 1 ? a + (b - a) * fx + (c - a) * fz : e + (c - e) * (1 - fx) + (b - e) * (1 - fz);
+  };
+  return { heightAt, distToTrack, groundY, mesh };
 }
