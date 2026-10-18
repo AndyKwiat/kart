@@ -189,13 +189,15 @@ function placeCamera(dt, snap = false) {
   const lerpAngle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
   camHeading = snap ? player.heading : lerpAngle(camHeading, player.heading, 1 - Math.exp(-dt * 4.5));
   const sr = Math.min(1, Math.max(0, player.speed) / player.maxSpeed);
-  const back = 6.8 + sr * 1.4;
+  // Over the chasm the camera swings wide and high for a cinematic shot.
+  const back = 6.8 + sr * 1.4 + cine * 9;
   // Vertical follow is softer so jumps and landings don't jolt the view.
   camY = snap ? player.y : camY + (player.y - camY) * (1 - Math.exp(-dt * (player.y > camY ? 9 : 6)));
+  const side = cine * 9;
   const target = new THREE.Vector3(
-    player.x - Math.sin(camHeading) * back,
-    camY + 4.3 + player.hopY * 0.3,
-    player.z - Math.cos(camHeading) * back,
+    player.x - Math.sin(camHeading) * back - Math.cos(camHeading) * side,
+    camY + 4.3 + player.hopY * 0.3 + cine * 4,
+    player.z - Math.cos(camHeading) * back + Math.sin(camHeading) * side,
   );
   if (snap) camera.position.copy(target);
   else camera.position.lerp(target, 1 - Math.exp(-dt * 12));
@@ -213,12 +215,13 @@ function placeCamera(dt, snap = false) {
     }
     camera.position.y = Math.min(camera.position.y, track.archTop(ci, clat) - 0.8);
   }
+  const ahead = 7 - cine * 5;
   camera.lookAt(
-    player.x + Math.sin(player.heading) * 7,
+    player.x + Math.sin(player.heading) * ahead,
     camY + 1.2,
-    player.z + Math.cos(player.heading) * 7,
+    player.z + Math.cos(player.heading) * ahead,
   );
-  const fov = 68 + sr * 10 + (player.boost > 0 ? 7 : 0);
+  const fov = 68 + sr * 10 + (player.boost > 0 ? 7 : 0) + cine * 12;
   camera.fov += (fov - camera.fov) * Math.min(1, dt * 4);
   camera.updateProjectionMatrix();
 
@@ -303,12 +306,23 @@ function updateHud() {
 }
 
 let last = performance.now();
+// Big-jump cinematics: while you're in the air over a chasm, time slows and
+// the camera pulls out (`cine` eases 0..1 in real time).
+let cine = 0;
+function updateCinematic(dt) {
+  const zone = track.gaps.some((g) => player.idx >= g.from - 45 && player.idx <= g.to + 40);
+  const want = zone && player.airborne && !player.finished ? 1 : 0;
+  cine += (want - cine) * Math.min(1, dt * (want > cine ? 5 : 2.5));
+}
+
 function frame(now) {
   const elapsed = (now - last) / 1000;
-  const dt = Math.min(0.05, elapsed);
+  const realDt = Math.min(0.05, elapsed);
   last = now;
   // Two substeps keep collisions stable at low frame rates.
   if (!paused) {
+    updateCinematic(realDt);
+    const dt = realDt * (1 - 0.6 * cine); // slow motion over the chasm
     step(dt / 2);
     step(dt / 2);
     effects.update(dt);
@@ -316,7 +330,7 @@ function frame(now) {
     sky.update(dt, camera);
     updateHud();
     render();
-    adaptQuality(elapsed);
+    if (cine < 0.05) adaptQuality(elapsed); // slow-mo frames aren't a perf signal
   }
   requestAnimationFrame(frame);
 }
@@ -349,7 +363,7 @@ if (import.meta.env.DEV) {
     for (let i = from; i < to; i += step) {
       const p = track.pos[i], r = track.right[i];
       for (let lat = -track.hw[i] + 1; lat <= track.hw[i] - 1; lat += 6) {
-        if (Math.abs(lat) < track.islandHw[i] + 0.5) continue;
+        if (Math.abs(lat - track.islandMid[i]) < track.islandHw[i] + 0.5) continue;
         const hit = firstHit(p.x + r.x * lat, p.z + r.z * lat);
         if (hit && hit.object !== track.road) bad.push({ i, lat, over: +(hit.point.y - track.height[i]).toFixed(2) });
       }

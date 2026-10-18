@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from './materials.js';
 import { grassDetailTexture } from './textures.js';
 import { SKY } from './sky.js';
@@ -21,16 +22,29 @@ export function buildScenery(scene, track) {
 
   // Neutral speckle texture; terrain colour comes from vertex colours.
   const speckleTex = grassDetailTexture();
-  const plainTex = speckleTex.clone();
-  plainTex.repeat.set(160, 160);
-  const plain = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), toon(0x7ccf55, { map: plainTex }));
-  plain.rotation.x = -Math.PI / 2;
-  plain.position.y = -1;
-  scene.add(plain);
-
   const box = new THREE.Box3().setFromPoints(track.pos);
   const lake = findLake(track, box);
-  const { heightAt, distToTrack, groundY, ponds, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
+  const { heightAt, distToTrack, groundY, ponds, chasms, inChasm, bounds, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
+
+  // Flat backdrop plain at y = -1 *around* the terrain grid (a frame, not a
+  // sheet underneath), so valleys and the canyon can go below it.
+  const plainMat = toon(0x7ccf55, { map: speckleTex });
+  const plainGeo = (x0, z0, x1, z1) => {
+    const g = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
+    g.rotateX(-Math.PI / 2);
+    g.translate((x0 + x1) / 2, -1, (z0 + z1) / 2);
+    const uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (x0 + uv.getX(i) * (x1 - x0)) / 24, (z0 + uv.getY(i) * (z1 - z0)) / 24);
+    return g;
+  };
+  const F = 2500, { minX, maxX, minZ, maxZ } = bounds;
+  const plain = new THREE.Mesh(mergeGeometries([
+    plainGeo(minX - F, minZ - F, maxX + F, minZ),
+    plainGeo(minX - F, maxZ, maxX + F, maxZ + F),
+    plainGeo(minX - F, minZ, minX, maxZ),
+    plainGeo(maxX, minZ, maxX + F, maxZ),
+  ]), plainMat);
+  scene.add(plain);
 
   const waterMat = new THREE.MeshPhysicalMaterial({
     color: 0x2f8fd8, roughness: 0.08, metalness: 0, clearcoat: 1,
@@ -46,8 +60,37 @@ export function buildScenery(scene, track) {
   if (lake) addWater(lake.x, lake.z, lake.r * 1.25, lake.level);
   for (const p of ponds) addWater(p.x, p.z, p.r * 1.15, p.level);
 
+  // River along the bottom of each canyon, with boulders on the banks.
+  for (const ch of chasms) {
+    const w = ch.halfGap - 4, e = ch.extent - 40, y = ch.floor + 2.2;
+    const corners = [[-e, -w], [e, -w], [e, w], [-e, w]].map(([sd, al]) => [
+      ch.c.x + ch.r.x * sd + ch.t.x * al, y, ch.c.z + ch.r.z * sd + ch.t.z * al,
+    ]);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(corners.flat(), 3));
+    g.setIndex([0, 2, 1, 0, 3, 2]);
+    g.computeVertexNormals();
+    const river = new THREE.Mesh(g, waterMat);
+    river.material = waterMat.clone();
+    river.material.side = THREE.DoubleSide;
+    river.material.color.setHex(0x2a7fd0);
+    scene.add(river);
+    const rockMat = toon(0x8c857c, { flatShading: true });
+    for (let n = 0; n < 40; n++) {
+      const sd = (Math.random() * 2 - 1) * (ch.extent - 60), al = (Math.random() * 2 - 1) * (ch.halfGap - 2);
+      const x = ch.c.x + ch.r.x * sd + ch.t.x * al, z = ch.c.z + ch.r.z * sd + ch.t.z * al;
+      const size = 1 + Math.random() * 3.5;
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), rockMat);
+      rock.position.set(x, groundY(x, z) + size * 0.3, z);
+      rock.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      rock.castShadow = true;
+      scene.add(rock);
+    }
+  }
+
   const inLake = (x, z) => lake && Math.hypot(x - lake.x, z - lake.z) < lake.r * 1.3;
-  const inWater = (x, z) => inLake(x, z) || ponds.some((p) => Math.hypot(x - p.x, z - p.z) < p.r * 1.1);
+  // (canyons count as "water" for placement: nothing grows or grazes in them)
+  const inWater = (x, z) => inLake(x, z) || inChasm(x, z) || ponds.some((p) => Math.hypot(x - p.x, z - p.z) < p.r * 1.1);
   const scatter = (count, minD, maxD, maxH, expand) => {
     const b = box.clone().expandByScalar(expand);
     const spots = [];
@@ -171,6 +214,46 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   };
 
   const longTunnels = track.tunnels.filter((t) => t.long);
+
+  // Canyons under road gaps: a deep cut across the track at the gap, with
+  // wobbly cliff edges, running out sideways until it would reach another
+  // part of the track, then pinching closed.
+  const chasms = track.gaps.map((g) => {
+    const i = g.center, c = track.pos[i], t = track.tan[i], r = track.right[i];
+    const halfGap = ((g.to - g.from) * track.spacing) / 2;
+    const roadLow = Math.min(track.roadHeight(track.wrap(g.from), 0), track.roadHeight(track.wrap(g.to), 0));
+    let extent = 420;
+    for (let j = 0; j < track.N; j += 3) {
+      let dj = Math.abs(j - i);
+      dj = Math.min(dj, track.N - dj);
+      if (dj < 260) continue;
+      const p = track.pos[j];
+      const along = (p.x - c.x) * t.x + (p.z - c.z) * t.z;
+      const side = (p.x - c.x) * r.x + (p.z - c.z) * r.z;
+      if (Math.abs(along) < 90) extent = Math.min(extent, Math.abs(side) - 70);
+    }
+    return { c, t, r, halfGap, floor: roadLow - 42, extent: Math.max(80, extent) };
+  });
+  const chasmLocal = (ch, x, z) => {
+    const along = (x - ch.c.x) * ch.t.x + (z - ch.c.z) * ch.t.z;
+    const side = (x - ch.c.x) * ch.r.x + (z - ch.c.z) * ch.r.z;
+    const wobble = (4 * Math.sin(side / 19) + 2.5 * Math.sin(side / 7.3)) * smoothstep(Math.abs(side), 25, 80);
+    return { along, side, halfW: ch.halfGap - 1.5 + wobble };
+  };
+  const carveChasms = (x, z, h) => {
+    for (const ch of chasms) {
+      const { along, side, halfW } = chasmLocal(ch, x, z);
+      if (Math.abs(side) > ch.extent || Math.abs(along) > halfW + 10) continue;
+      const dig = (1 - smoothstep(Math.abs(along), halfW, halfW + 8)) * (1 - smoothstep(Math.abs(side), ch.extent - 90, ch.extent));
+      const floor = ch.floor + 1.5 * Math.sin(side / 11) + Math.abs(along) * 0.15;
+      h = Math.min(h, lerp(h, floor, dig));
+    }
+    return h;
+  };
+  const inChasm = (x, z) => chasms.some((ch) => {
+    const { along, side, halfW } = chasmLocal(ch, x, z);
+    return Math.abs(side) < ch.extent && Math.abs(along) < halfW + 12;
+  });
   // [nearest sample index along tunnel t, distance to its centreline]
   const nearestOnTunnel = (t, x, z) => {
     let best = t.from, bestD = Infinity;
@@ -194,9 +277,9 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     // terrain grid can't poke up through bumps (whoops, ramp bases); under a
     // fork island use the lower route so it stays below the island mound.
     const lat = Math.max(-wall, Math.min(wall, track.lateral(i, x, z)));
-    const iw = track.islandHw[i];
-    let roadH = iw > 0 && Math.abs(lat) < iw + 2
-      ? Math.min(track.roadHeight(i, -iw - 0.01), track.roadHeight(i, iw + 0.01))
+    const iw = track.islandHw[i], mid = track.islandMid[i];
+    let roadH = iw > 0 && Math.abs(lat - mid) < iw + 2
+      ? Math.min(track.roadHeight(i, mid - iw - 0.01), track.roadHeight(i, mid + iw + 0.01))
       : track.roadHeight(i, lat);
     if (d < track.hw[i] + 3) {
       for (let k = -6; k <= 6; k++) roadH = Math.min(roadH, track.roadHeight(track.wrap(i + k), lat));
@@ -231,7 +314,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
         h = Math.max(h, lerp(h, mound, tw));
       }
     }
-    return h;
+    return carveChasms(x, z, h);
   };
 
   // Ponds: small basins on fairly flat ground away from the track and lake
@@ -351,5 +434,5 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     const a = H(i, j), b = H(i + 1, j), c = H(i, j + 1), e = H(i + 1, j + 1);
     return fx + fz <= 1 ? a + (b - a) * fx + (c - a) * fz : e + (c - e) * (1 - fx) + (b - e) * (1 - fz);
   };
-  return { heightAt, distToTrack, groundY, ponds, mesh };
+  return { heightAt, distToTrack, groundY, ponds, chasms, inChasm, bounds: { minX, maxX, minZ, maxZ }, mesh };
 }

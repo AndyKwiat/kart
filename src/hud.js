@@ -48,7 +48,7 @@ export class Hud {
     const trace = (side) => {
       g.beginPath();
       track.pos.forEach((p, i) => {
-        const lat = side * track.forkO[i], r = track.right[i];
+        const lat = track.route(i, side).center, r = track.right[i];
         const [x, y] = this.toMap(p.x + r.x * lat, p.z + r.z * lat);
         i ? g.lineTo(x, y) : g.moveTo(x, y);
       });

@@ -332,8 +332,9 @@ export class Car {
         else bounce(s, s * inner);
       }
     } else if (Math.abs(lat) < outer) {
-      if (overWall) this.rejoinTrack(track);
-      else bounce(-s, s * outer);
+      // Back over the wall only once clear of it; still low means you hit it.
+      if (!overWall) bounce(-s, s * outer);
+      else if (Math.abs(lat) < inner) this.rejoinTrack(track);
     }
     if (this.outside) {
       this.outTime += dt;
@@ -342,13 +343,14 @@ export class Car {
 
     // Fork island: a solid curb for cars on the road, but you can jump onto
     // the mound (or clear it entirely) and drive off the other side.
-    const iw = track.islandHw[this.idx];
+    const iw = track.islandHw[this.idx], mid = track.islandMid[this.idx];
     if (iw > 0 && !this.outside && !this.onIsland) {
       const lim = iw + CAR_RADIUS - 0.3;
-      if (Math.abs(lat) < lim) {
-        const side = lat >= 0 ? 1 : -1;
-        const top = Math.abs(lat) < iw ? track.islandTop(this.idx, lat) : track.islandTop(this.idx, side * iw);
-        if (this.y < top - 0.15) bounce(-side, side * lim);
+      const rel = lat - mid;
+      if (Math.abs(rel) < lim) {
+        const side = rel >= 0 ? 1 : -1;
+        const top = Math.abs(rel) < iw ? track.islandTop(this.idx, lat) : track.islandTop(this.idx, mid + side * iw);
+        if (this.y < top - 0.15) bounce(-side, mid + side * lim);
       }
     }
     this.lateral = lat;
@@ -362,7 +364,12 @@ export class Car {
       this.onIsland = false;
     } else {
       ground = track.heightAt(this.idx, this.x, this.z);
-      const top = iw > 0 && Math.abs(lat) < iw ? track.islandTop(this.idx, lat) : -Infinity;
+      // No road over a gap: fall into the canyon if you didn't make it.
+      if (track.gapAt[this.idx]) {
+        if (this.y < ground - 7) return this.fellIn(track);
+        ground -= 60;
+      }
+      const top = iw > 0 && Math.abs(lat - mid) < iw ? track.islandTop(this.idx, lat) : -Infinity;
       this.onIsland = top > ground;
       if (this.onIsland) ground = top;
     }
@@ -429,8 +436,19 @@ export class Car {
     this.progress = this.exitProgress + df;
   }
 
+  // Missed the big jump: back up the run-up (before the boost pads) with
+  // some speed, for another go.
+  fellIn(track) {
+    const g = track.gaps.find((gg) => this.idx >= gg.from && this.idx <= gg.to) ?? track.gaps[0];
+    const back = this.idx - (g.from - 150);
+    this.exitIdx = track.wrap(g.from - 150);
+    this.exitProgress = this.progress - back;
+    this.respawn(track, 32);
+    this.lateral = 0;
+  }
+
   // Put the car back on the road where it left, pointing down the track.
-  respawn(track) {
+  respawn(track, speed = 12) {
     const i = track.wrap(this.exitIdx);
     const side = Math.sign(this.lateral || 1);
     const lat = track.route(i, side).center;
@@ -440,8 +458,8 @@ export class Car {
     this.z = p.z + r.z * lat;
     this.y = track.roadHeight(i, lat);
     this.heading = heading;
-    this.vx = Math.sin(heading) * 12;
-    this.vz = Math.cos(heading) * 12;
+    this.vx = Math.sin(heading) * speed;
+    this.vz = Math.cos(heading) * speed;
     this.vy = 0;
     this.airborne = false;
     this.drifting = false;

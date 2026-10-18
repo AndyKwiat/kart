@@ -62,7 +62,7 @@ export class AIDriver {
         this.forkFor = forkId;
         this.forkSide = Math.random() < 0.5 ? -1 : 1;
       }
-      if (track.islandHw[car.idx] > 0) this.forkSide = Math.sign(car.lateral || this.forkSide);
+      if (track.islandHw[car.idx] > 0) this.forkSide = Math.sign(car.lateral - track.islandMid[car.idx] || this.forkSide);
       ({ center, half } = track.route(ti, this.forkSide));
     } else {
       this.forkFor = -1;
