@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from './materials.js';
+import { part } from './geom.js';
 
 // Ambient wildlife: grazing cows and sheep, high flocks of birds, birds
 // circling over the roadside, and birds pecking in the grass that scatter
@@ -14,20 +15,6 @@ const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 // --- Low-poly models (merged, vertex coloured) -------------------------------
 
-function part(geo, color, x = 0, y = 0, z = 0, { rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1 } = {}) {
-  const g = geo.index ? geo.toNonIndexed() : geo.clone();
-  g.applyMatrix4(new THREE.Matrix4().compose(
-    new THREE.Vector3(x, y, z),
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
-    new THREE.Vector3(sx, sy, sz),
-  ));
-  for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
-  const c = new THREE.Color(color);
-  const colors = new Float32Array(g.attributes.position.count * 3);
-  for (let i = 0; i < colors.length; i += 3) colors.set([c.r, c.g, c.b], i);
-  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  return g;
-}
 const rbox = (w, h, d, r) => new RoundedBoxGeometry(w, h, d, 2, r);
 const ball = new THREE.IcosahedronGeometry(1, 1);
 const lowBall = new THREE.IcosahedronGeometry(1, 0); // birds are small and numerous
@@ -209,7 +196,7 @@ class Birds {
     // High flocks drifting across the sky in loose V formations.
     this.flocks = [];
     const c = world.box.getCenter(new THREE.Vector3());
-    for (let f = 0; f < 16; f++) {
+    for (let f = 0; f < 10; f++) {
       const flock = {
         cx: c.x + rand(-500, 500), cz: c.z + rand(-500, 500), r: rand(250, 600),
         w: rand(0.02, 0.05) * (Math.random() < 0.5 ? -1 : 1), phase: rand(0, 6.3),
@@ -228,7 +215,7 @@ class Birds {
 
     // Spots along the roadside: birds circling overhead and birds on the ground.
     const spots = [];
-    const nSpots = 40;
+    const nSpots = 24;
     for (let s = 0; s < nSpots; s++) {
       const i = Math.floor(((s + Math.random() * 0.6) / nSpots) * track.N) % track.N;
       const side = Math.random() < 0.5 ? -1 : 1;

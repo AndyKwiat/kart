@@ -392,5 +392,5 @@ if (import.meta.env.DEV) {
     camera.updateProjectionMatrix();
     render();
   };
-  window.__kart = { cars, player, track, step, render, effects, wildlife, renderer, composer, scene, camera, hud, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
+  window.__kart = { cars, player, track, step, render, effects, wildlife, world, renderer, composer, scene, camera, hud, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
 }

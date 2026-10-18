@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { toon } from './materials.js';
 import { grassDetailTexture } from './textures.js';
 import { SKY } from './sky.js';
+import { buildVegetation } from './vegetation.js';
 
 export function buildScenery(scene, track) {
   scene.fog = new THREE.Fog(SKY.horizon.clone(), 260, 1000);
@@ -29,23 +30,24 @@ export function buildScenery(scene, track) {
 
   const box = new THREE.Box3().setFromPoints(track.pos);
   const lake = findLake(track, box);
-  const { heightAt, distToTrack, groundY, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
+  const { heightAt, distToTrack, groundY, ponds, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
 
-  if (lake) {
-    const water = new THREE.Mesh(
-      new THREE.CircleGeometry(lake.r * 1.25, 48),
-      new THREE.MeshPhysicalMaterial({
-        color: 0x2f8fd8, roughness: 0.08, metalness: 0, clearcoat: 1,
-        transparent: true, opacity: 0.88, envMapIntensity: 1.2,
-      }),
-    );
+  const waterMat = new THREE.MeshPhysicalMaterial({
+    color: 0x2f8fd8, roughness: 0.08, metalness: 0, clearcoat: 1,
+    transparent: true, opacity: 0.88, envMapIntensity: 1.2,
+  });
+  const addWater = (x, z, r, level) => {
+    const water = new THREE.Mesh(new THREE.CircleGeometry(r, 48), waterMat);
     water.rotation.x = -Math.PI / 2;
-    water.position.set(lake.x, lake.level, lake.z);
+    water.position.set(x, level, z);
     water.receiveShadow = true;
     scene.add(water);
-  }
+  };
+  if (lake) addWater(lake.x, lake.z, lake.r * 1.25, lake.level);
+  for (const p of ponds) addWater(p.x, p.z, p.r * 1.15, p.level);
 
   const inLake = (x, z) => lake && Math.hypot(x - lake.x, z - lake.z) < lake.r * 1.3;
+  const inWater = (x, z) => inLake(x, z) || ponds.some((p) => Math.hypot(x - p.x, z - p.z) < p.r * 1.1);
   const scatter = (count, minD, maxD, maxH, expand) => {
     const b = box.clone().expandByScalar(expand);
     const spots = [];
@@ -53,7 +55,7 @@ export function buildScenery(scene, track) {
       const x = THREE.MathUtils.lerp(b.min.x, b.max.x, Math.random());
       const z = THREE.MathUtils.lerp(b.min.z, b.max.z, Math.random());
       const [, d, wall] = distToTrack(x, z);
-      if (d < wall + minD || d > wall + maxD || inLake(x, z)) continue;
+      if (d < wall + minD || d > wall + maxD || inWater(x, z)) continue;
       const y = heightAt(x, z);
       if (y > maxH) continue;
       spots.push([x, y, z]);
@@ -65,27 +67,8 @@ export function buildScenery(scene, track) {
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3();
   const c = new THREE.Color();
-  const yAxis = new THREE.Vector3(0, 1, 0);
 
-  // Pine trees, kept clear of the track, the lake and the snowline.
-  const trees = scatter(700, 5, 220, 60, 160);
-  const trunkGeo = new THREE.CylinderGeometry(0.45, 0.6, 2.4, 6);
-  trunkGeo.translate(0, 1.2, 0);
-  const leafGeo = new THREE.ConeGeometry(2.8, 6.5, 7);
-  leafGeo.translate(0, 5.4, 0);
-  const trunks = new THREE.InstancedMesh(trunkGeo, toon(0x8a5a32), trees.length);
-  const leaves = new THREE.InstancedMesh(leafGeo, toon(0xffffff, { flatShading: true }), trees.length);
-  const greens = [0x2f9e44, 0x3fb34f, 0x26843a, 0x51c45a];
-  trees.forEach(([x, y, z], i) => {
-    const k = 0.7 + Math.random() * 0.7;
-    q.setFromAxisAngle(yAxis, Math.random() * Math.PI);
-    m.compose(new THREE.Vector3(x, y - 0.3, z), q, s.set(k, k, k));
-    trunks.setMatrixAt(i, m);
-    leaves.setMatrixAt(i, m);
-    leaves.setColorAt(i, c.setHex(greens[i % greens.length]));
-  });
-  trunks.castShadow = leaves.castShadow = true;
-  scene.add(trunks, leaves);
+  buildVegetation(scene, { groundY, distToTrack, box, inWater, ponds });
 
   // Boulders: a few right behind the walls, more out in the hills.
   const rocks = [...scatter(140, 1.5, 12, 999, 40), ...scatter(160, 30, 260, 999, 200)];
@@ -110,7 +93,7 @@ export function buildScenery(scene, track) {
   // below the rocky/snowy heights and not too steep.
   const pasture = (x, z) => {
     const [, d, wall] = distToTrack(x, z);
-    if (d < wall + 8 || d > wall + 260 || inLake(x, z)) return false;
+    if (d < wall + 8 || d > wall + 260 || inWater(x, z)) return false;
     const y = groundY(x, z);
     if (y > 55) return false;
     const slope = Math.abs(groundY(x + 2, z) - y) + Math.abs(groundY(x, z + 2) - y);
@@ -119,7 +102,7 @@ export function buildScenery(scene, track) {
 
   return {
     sun, ground: [terrain, plain], lake, center: box.getCenter(new THREE.Vector3()),
-    groundY, distToTrack, pasture, box,
+    groundY, distToTrack, pasture, box, ponds,
   };
 }
 
@@ -185,7 +168,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     return [best, Math.sqrt(bestD), track.wallOffset(best)];
   };
 
-  const heightAt = (x, z) => {
+  const baseHeight = (x, z) => {
     const [i, d, wall] = distToTrack(x, z);
     // Road height here, following banking and per-route fork heights out to
     // the wall. Under the road use the lowest nearby road height, so the coarse
@@ -218,6 +201,38 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
         const mound = roadH - 0.3 + (t.height + 5) * smoothstep(d, W + 1, W + 9) * (1 - smoothstep(d, W + 35, W + 110));
         h = Math.max(h, lerp(h, mound, tw));
       }
+    }
+    return h;
+  };
+
+  // Ponds: small basins on fairly flat ground away from the track and lake
+  // (inside the fine part of the terrain grid so the shoreline is smooth).
+  const ponds = [];
+  const area = trackBox.clone().expandByScalar(60);
+  for (let tries = 0; ponds.length < 8 && tries < 6000; tries++) {
+    const x = lerp(area.min.x, area.max.x, Math.random()), z = lerp(area.min.z, area.max.z, Math.random());
+    const r = 8 + Math.random() * 8;
+    const [, d, wall] = distToTrack(x, z);
+    if (d < wall + r + 15 || d > wall + 200) continue;
+    if (lake && Math.hypot(x - lake.x, z - lake.z) < lake.r * 1.6 + r + 25) continue;
+    if (ponds.some((p) => Math.hypot(p.x - x, p.z - z) < p.r + r + 45)) continue;
+    let lo = Infinity, hi = -Infinity;
+    for (let a = 0; a < 8; a++) {
+      const h = baseHeight(x + Math.cos(a * 0.785) * r * 1.3, z + Math.sin(a * 0.785) * r * 1.3);
+      lo = Math.min(lo, h); hi = Math.max(hi, h);
+    }
+    if (hi - lo > 3 || hi > 55) continue;
+    ponds.push({ x, z, r, level: lo - 0.4 });
+  }
+
+  const heightAt = (x, z) => {
+    let h = baseHeight(x, z);
+    for (const p of ponds) {
+      const dd = Math.hypot(x - p.x, z - p.z);
+      if (dd > p.r * 3) continue;
+      // Bowl below the water inside the shoreline, gentle bank outside it.
+      const bowl = dd < p.r ? p.level - 1.8 * (1 - (dd / p.r) ** 2) : p.level + (dd - p.r) * 0.3;
+      h = Math.min(h, bowl);
     }
     return h;
   };
@@ -263,7 +278,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   const normal = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
   const grass = new THREE.Color(0x6cc24a), darkGrass = new THREE.Color(0x4f9e3a);
-  const sand = new THREE.Color(0xe3d08a), rock = new THREE.Color(0x8b8580), snow = new THREE.Color(0xf6f8ff);
+  const mud = new THREE.Color(0x8a7a52), sand = new THREE.Color(0xe3d08a), rock = new THREE.Color(0x8b8580), snow = new THREE.Color(0xf6f8ff);
   const col = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -272,6 +287,10 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     if (lake) {
       const shore = 1 - smoothstep(Math.hypot(x - lake.x, z - lake.z), lake.r * 1.2, lake.r * 1.6);
       col.lerp(sand, shore * (1 - smoothstep(y, lake.level + 0.6, lake.level + 2.2)));
+    }
+    for (const p of ponds) {
+      const dd = Math.hypot(x - p.x, z - p.z);
+      if (dd < p.r * 1.6) col.lerp(mud, (1 - smoothstep(dd, p.r * 0.9, p.r * 1.5)) * 0.85);
     }
     col.lerp(rock, smoothstep(steep, 0.12, 0.3));
     col.lerp(snow, smoothstep(y, 75, 90));
@@ -303,5 +322,5 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     const a = H(i, j), b = H(i + 1, j), c = H(i, j + 1), e = H(i + 1, j + 1);
     return fx + fz <= 1 ? a + (b - a) * fx + (c - a) * fz : e + (c - e) * (1 - fx) + (b - e) * (1 - fz);
   };
-  return { heightAt, distToTrack, groundY, mesh };
+  return { heightAt, distToTrack, groundY, ponds, mesh };
 }
