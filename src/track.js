@@ -98,6 +98,7 @@ const PADS = [
   { at: 4640, lat: 7 },
 ];
 export const PAD_HALF_LENGTH = 4;
+const ISLAND_LIFT = 0.45; // height of the island curb above the road
 export const PAD_HALF_WIDTH = 2.6;
 
 const smooth = (t) => t * t * (3 - 2 * t);
@@ -212,7 +213,16 @@ export class Track {
     });
 
     this.tunnelAt = new Uint8Array(this.N);
-    for (const t of this.tunnels) for (let i = t.from; i <= t.to; i++) this.tunnelAt[this.wrap(i)] = 1;
+    this.tunnelOf = new Array(this.N).fill(null);
+    for (const t of this.tunnels) {
+      for (let i = t.from; i <= t.to; i++) {
+        this.tunnelAt[this.wrap(i)] = 1;
+        this.tunnelOf[this.wrap(i)] = t;
+      }
+    }
+    // Set from outside once the terrain exists: terrain height at (x, z), for
+    // cars that leave the track.
+    this.terrainY = null;
 
     // Absolute ceiling height per sample inside long tunnels (Infinity elsewhere).
     this.ceil = new Float32Array(this.N).fill(Infinity);
@@ -257,7 +267,8 @@ export class Track {
     const raw = [];
     for (let n = 0; n <= span; n++) {
       const k = this.wrap(from + n);
-      raw.push(Math.max(top(k) + 10.5, need[n] + 6));
+      // Headroom for the car plus the chase camera riding above it.
+      raw.push(Math.max(top(k) + 12, need[n] + 9));
     }
     const max = raw.map((_, n) => Math.max(...raw.slice(Math.max(0, n - 30), n + 31)));
     for (let n = 0; n <= span; n++) {
@@ -297,6 +308,27 @@ export class Track {
     const iw = this.islandHw[i];
     if (iw > 0) h += this.sideH[lat < 0 ? 0 : 1][i] * Math.min(1, iw / 3);
     return h;
+  }
+
+  // Inside a tunnel: height of the arch above lateral offset `lat` (the arch is
+  // a half-ellipse, lowest at the walls). Infinity outside tunnels.
+  archTop(i, lat) {
+    const t = this.tunnelOf[i];
+    if (!t || !t.heightAt) return Infinity;
+    const w = this.wallOffset(i) + 0.6;
+    const f = Math.min(0.995, Math.abs(lat) / w);
+    return this.roadHeight(i, lat) - 0.4 + Math.sqrt(1 - f * f) * t.heightAt(i);
+  }
+
+  // Fork island surface height at lateral `lat` (mound between the routes),
+  // or -Infinity off the island.
+  islandTop(i, lat) {
+    const iw = this.islandHw[i];
+    if (iw <= 0) return lat === 0 ? this.roadHeight(i, 0) + ISLAND_LIFT : -Infinity; // island tip
+    if (Math.abs(lat) > iw) return -Infinity;
+    const c = lat / iw;
+    const hl = this.roadHeight(i, -iw), hr = this.roadHeight(i, iw);
+    return THREE.MathUtils.lerp(hl, hr, (c + 1) / 2) + ISLAND_LIFT + Math.min(6, iw * 0.3) * (1 - c * c);
   }
 
   // Centre and half-width of the route on `side` at sample i inside a fork,
@@ -498,15 +530,10 @@ export class Track {
   // Fork island: a grassy mound between the two routes, curb-striped sides,
   // trees and rocks, and a chevron board where the road splits.
   buildIsland({ from, to }) {
-    const lift = 0.45;
+    const lift = ISLAND_LIFT;
     const COLS = [-1, -0.5, 0, 0.5, 1];
     // Island surface height at sample k, fraction c (-1..1) across.
-    const surface = (k, c) => {
-      const iw = this.islandHw[k];
-      const hl = this.roadHeight(k, -iw), hr = this.roadHeight(k, iw);
-      const hump = Math.min(6, iw * 0.3) * (1 - c * c);
-      return THREE.MathUtils.lerp(hl, hr, (c + 1) / 2) + lift + hump;
-    };
+    const surface = (k, c) => this.islandTop(k, c * this.islandHw[k]);
     const point = (k, lat, h) => {
       const p = this.pos[k], r = this.right[k];
       return [p.x + r.x * lat, h, p.z + r.z * lat];

@@ -169,6 +169,7 @@ export class Car {
     this.mesh.rotation.order = 'YXZ';
     this.impacts = []; // wall/car hits this frame, drained by the effects code
     this.maxSpeed = MAX_SPEED;
+    this.respawnAfter = 2; // seconds off the track before being put back
   }
 
   reset(x, z, heading, idx, progress) {
@@ -181,6 +182,12 @@ export class Car {
     this.vy = 0;
     this.airborne = false;
     this.squash = 0;
+    this.onIsland = false;
+    this.outside = false; // flew over the wall and is off the track
+    this.outTime = 0;
+    this.exitIdx = idx;
+    this.exitProgress = progress;
+    this.respawned = false;
     this.vx = 0; this.vz = 0;
     this.heading = heading;
     this.speed = 0;
@@ -290,56 +297,78 @@ export class Car {
     let d = this.idx - prev;
     if (d > track.N / 2) d -= track.N;
     if (d < -track.N / 2) d += track.N;
-    this.progress += d;
+    // No progress while off the track (no shortcuts across the countryside).
+    if (!this.outside) this.progress += d;
 
+    const r = track.right[this.idx];
     let lat = track.lateral(this.idx, this.x, this.z);
-    const limit = track.wallOffset(this.idx) - CAR_RADIUS + 0.6;
-    if (Math.abs(lat) > limit) {
-      const r = track.right[this.idx];
-      const s = Math.sign(lat);
-      const push = Math.abs(lat) - limit;
-      this.x -= r.x * s * push;
-      this.z -= r.z * s * push;
+    const wall = track.wallOffset(this.idx);
+    const s = Math.sign(lat) || 1;
+    // Walls stop cars near the ground; a car flying higher than the barrier
+    // sails over it (never in tunnels).
+    const wallTop = track.roadHeight(this.idx, s * wall) + 1.1;
+    const overWall = this.y > wallTop + 0.4 && !track.tunnelAt[this.idx];
+    const inner = wall - CAR_RADIUS + 0.6, outer = wall + CAR_RADIUS;
+    const bounce = (dir, at) => {
+      // Push to lateral `at` and reflect velocity pointing toward `dir`.
+      const push = at - lat;
+      this.x += r.x * push;
+      this.z += r.z * push;
       const vn = this.vx * r.x + this.vz * r.z;
-      if (vn * s > 0) {
+      if (vn * dir > 0) {
         this.vx -= r.x * vn * 1.4;
         this.vz -= r.z * vn * 1.4;
         this.vx *= 0.96;
         this.vz *= 0.96;
-        // Scrape point on the wall, for sparks.
         if (Math.abs(vn) > 2) {
-          this.impacts.push({ x: this.x + r.x * s * CAR_RADIUS, y: this.y + 0.6, z: this.z + r.z * s * CAR_RADIUS, strength: Math.abs(vn) });
+          this.impacts.push({ x: this.x + r.x * dir * CAR_RADIUS, y: this.y + 0.6, z: this.z + r.z * dir * CAR_RADIUS, strength: Math.abs(vn) });
         }
       }
-      lat = s * limit;
+      lat = at;
+    };
+    if (!this.outside) {
+      if (Math.abs(lat) > inner) {
+        if (overWall) this.leaveTrack();
+        else bounce(s, s * inner);
+      }
+    } else if (Math.abs(lat) < outer) {
+      if (overWall) this.rejoinTrack(track);
+      else bounce(-s, s * outer);
     }
-    // Median island: solid, like a low wall down the middle.
+    if (this.outside) {
+      this.outTime += dt;
+      if (this.outTime > this.respawnAfter) return this.respawn(track);
+    }
+
+    // Fork island: a solid curb for cars on the road, but you can jump onto
+    // the mound (or clear it entirely) and drive off the other side.
     const iw = track.islandHw[this.idx];
-    if (iw > 0) {
+    if (iw > 0 && !this.outside && !this.onIsland) {
       const lim = iw + CAR_RADIUS - 0.3;
       if (Math.abs(lat) < lim) {
-        const r = track.right[this.idx];
-        const s = lat >= 0 ? 1 : -1;
-        const push = lim - Math.abs(lat);
-        this.x += r.x * s * push;
-        this.z += r.z * s * push;
-        const vn = this.vx * r.x + this.vz * r.z;
-        if (vn * s < 0) {
-          this.vx -= r.x * vn * 1.4;
-          this.vz -= r.z * vn * 1.4;
-          this.vx *= 0.96;
-          this.vz *= 0.96;
-        }
-        lat = s * lim;
+        const side = lat >= 0 ? 1 : -1;
+        const top = Math.abs(lat) < iw ? track.islandTop(this.idx, lat) : track.islandTop(this.idx, side * iw);
+        if (this.y < top - 0.15) bounce(-side, side * lim);
       }
     }
     this.lateral = lat;
-    this.bankSlope = track.bank[this.idx];
-    this.offroad = Math.abs(lat) > track.hw[this.idx] + CURB_WIDTH;
+    this.bankSlope = this.outside ? 0 : track.bank[this.idx];
+    this.offroad = this.outside || Math.abs(lat) > track.hw[this.idx] + CURB_WIDTH;
+
+    // Ground: road, island mound, or the terrain when off the track.
+    let ground;
+    if (this.outside && track.terrainY) {
+      ground = track.terrainY(this.x, this.z);
+      this.onIsland = false;
+    } else {
+      ground = track.heightAt(this.idx, this.x, this.z);
+      const top = iw > 0 && Math.abs(lat) < iw ? track.islandTop(this.idx, lat) : -Infinity;
+      this.onIsland = top > ground;
+      if (this.onIsland) ground = top;
+    }
 
     // Vertical: follow the ground unless it falls away faster than a
     // ballistic arc would (e.g. off a ramp lip), then fly until landing.
-    const ground = track.heightAt(this.idx, this.x, this.z);
     if (this.airborne) {
       this.vy -= GRAVITY * dt;
       this.y += this.vy * dt;
@@ -365,16 +394,63 @@ export class Car {
         this.y = ground;
       }
     }
-    if (!this.airborne && track.padAt(this.idx, lat)) this.boost = Math.max(this.boost, 0.9);
-    // Tunnel roof: never fly through it.
-    const roof = track.ceil[this.idx] - 2.2;
+    if (!this.airborne && !this.outside && track.padAt(this.idx, lat)) this.boost = Math.max(this.boost, 0.9);
+    // Tunnel roof: follows the arch (lower toward the walls).
+    const roof = track.archTop(this.idx, lat) - 1.9;
     if (this.y > roof) {
       this.y = roof;
       if (this.vy > 0) this.vy = 0;
     }
     const t = track.tan[this.idx];
     this.trackTan = t;
-    this.slope = track.slopeAt(this.idx, lat) * (Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z);
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    if (this.outside && track.terrainY) {
+      this.slope = (track.terrainY(this.x + fx, this.z + fz) - track.terrainY(this.x - fx, this.z - fz)) / 2;
+    } else {
+      this.slope = track.slopeAt(this.idx, lat) * (fx * t.x + fz * t.z);
+    }
+  }
+
+  leaveTrack() {
+    this.outside = true;
+    this.outTime = 0;
+    this.exitIdx = this.idx;
+    this.exitProgress = this.progress;
+  }
+
+  // Back over the wall: fine if it's near where you left, otherwise it was a
+  // shortcut and you go back to the exit point.
+  rejoinTrack(track) {
+    let df = this.idx - this.exitIdx;
+    if (df > track.N / 2) df -= track.N;
+    if (df < -track.N / 2) df += track.N;
+    if (Math.abs(df) > 80) return this.respawn(track);
+    this.outside = false;
+    this.progress = this.exitProgress + df;
+  }
+
+  // Put the car back on the road where it left, pointing down the track.
+  respawn(track) {
+    const i = track.wrap(this.exitIdx);
+    const side = Math.sign(this.lateral || 1);
+    const lat = track.route(i, side).center;
+    const p = track.pos[i], r = track.right[i];
+    const heading = track.headingAt(i);
+    this.x = p.x + r.x * lat;
+    this.z = p.z + r.z * lat;
+    this.y = track.roadHeight(i, lat);
+    this.heading = heading;
+    this.vx = Math.sin(heading) * 12;
+    this.vz = Math.cos(heading) * 12;
+    this.vy = 0;
+    this.airborne = false;
+    this.drifting = false;
+    this.idx = i;
+    this.progress = this.exitProgress;
+    this.lateral = lat;
+    this.outside = false;
+    this.outTime = 0;
+    this.respawned = true;
   }
 
   updateVisual(dt) {

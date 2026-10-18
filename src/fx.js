@@ -145,6 +145,12 @@ export class Effects {
     }
     car.impacts.length = 0;
 
+    if (car.respawned && near) {
+      for (let i = 0; i < 18; i++) {
+        const a = (i / 18) * Math.PI * 2;
+        this.puff.emit(car.x + Math.cos(a), car.y + 0.6, car.z + Math.sin(a), Math.cos(a) * 4, 2, Math.sin(a) * 4, P.smoke);
+      }
+    }
     if (car.landed) {
       if (near && car.landed > 6) {
         for (let i = 0; i < 14; i++) {

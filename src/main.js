@@ -32,6 +32,7 @@ const track = new Track();
 scene.add(track.group);
 const world = buildScenery(scene, track);
 const { sun, ground, center } = world;
+track.terrainY = world.groundY; // lets cars drive on the terrain off-track
 const sky = new Sky(scene, renderer, center);
 const effects = new Effects(scene);
 const wildlife = new Wildlife(scene, world, track);
@@ -100,11 +101,14 @@ const player = new Car(0xe53935, 'You');
 // Slightly lower top speed than before (52) so the player's edge over the
 // AI comes mostly from driving well (drift boosts, lines, dash pads).
 player.maxSpeed = 51;
+player.respawnAfter = 5; // seconds you can spend off the track
 const cars = [...COLORS.map((c, i) => new Car(c, `CPU ${i + 1}`)), player];
 // Opponent top speeds relative to yours: CPU 1-4 +20%, CPU 5-6 +10%.
 // CPU 7 keeps the default top speed with a little less skill.
 for (const car of cars.slice(0, 4)) car.maxSpeed = player.maxSpeed * 1.2;
 for (const car of cars.slice(4, 6)) car.maxSpeed = player.maxSpeed * 1.1;
+// Every opponent a further 5% faster.
+for (const car of cars) if (car !== player) car.maxSpeed *= 1.05;
 const FULL_SKILL = new Set(cars.slice(0, 6));
 for (const car of cars) scene.add(car.mesh);
 const drivers = new Map();
@@ -195,6 +199,20 @@ function placeCamera(dt, snap = false) {
   );
   if (snap) camera.position.copy(target);
   else camera.position.lerp(target, 1 - Math.exp(-dt * 12));
+  // Keep the camera inside tunnel arches (it rides above and behind the car).
+  const ci = track.nearest(camera.position.x, camera.position.z, player.idx);
+  if (track.tunnelAt[ci]) {
+    const r = track.right[ci];
+    let clat = track.lateral(ci, camera.position.x, camera.position.z);
+    const w = track.wallOffset(ci) - 0.5;
+    if (Math.abs(clat) > w) {
+      const shift = Math.sign(clat) * w - clat;
+      camera.position.x += r.x * shift;
+      camera.position.z += r.z * shift;
+      clat += shift;
+    }
+    camera.position.y = Math.min(camera.position.y, track.archTop(ci, clat) - 0.8);
+  }
   camera.lookAt(
     player.x + Math.sin(player.heading) * 7,
     camY + 1.2,
@@ -252,6 +270,8 @@ function step(dt) {
     const near = car === player || camera.position.distanceToSquared(car.mesh.position) < 140 * 140;
     effects.car(car, dt, near, car === player);
   }
+  const respawnSnap = player.respawned;
+  for (const car of cars) car.respawned = false;
 
   const lap = Math.min(LAPS, Math.max(1, Math.floor(player.progress / track.N) + 1));
   if (state === 'race' && lap !== lastLap && lap > lastLap) {
@@ -259,7 +279,7 @@ function step(dt) {
   }
   lastLap = Math.max(lastLap, lap);
   hud.tickFlash(clock);
-  placeCamera(dt);
+  placeCamera(dt, respawnSnap);
 }
 
 // DOM/minimap updates once per rendered frame (not per physics substep).
