@@ -12,7 +12,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { FXAAPass } from 'three/examples/jsm/postprocessing/FXAAPass.js';
 
-const LAPS = 3;
+const LAPS = 2;
 const COUNTDOWN = 3;
 
 const pixelRatio = Math.min(window.devicePixelRatio, 2);
@@ -325,6 +325,7 @@ if (import.meta.env.DEV) {
     for (let i = from; i < to; i += step) {
       const p = track.pos[i], r = track.right[i];
       for (let lat = -track.hw[i] + 1; lat <= track.hw[i] - 1; lat += 6) {
+        if (Math.abs(lat) < track.islandHw[i] + 0.5) continue;
         const hit = firstHit(p.x + r.x * lat, p.z + r.z * lat);
         if (hit && hit.object !== track.road) bad.push({ i, lat, over: +(hit.point.y - track.height[i]).toFixed(2) });
       }

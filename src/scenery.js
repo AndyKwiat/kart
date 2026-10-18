@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { toon } from './materials.js';
 import { grassDetailTexture } from './textures.js';
 import { SKY } from './sky.js';
-import { TUNNELS } from './track.js';
 
 export function buildScenery(scene, track) {
   scene.fog = new THREE.Fog(SKY.horizon.clone(), 260, 1000);
@@ -174,15 +173,18 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
 
   const heightAt = (x, z) => {
     const [i, d, wall] = distToTrack(x, z);
-    // Under the road use the lowest nearby road height, so the coarse terrain
-    // grid can't poke up through bumps (whoops, ramp bases).
-    let roadH = track.height[i];
-    if (d < track.hw[i] + 3) {
-      for (let k = -6; k <= 6; k++) roadH = Math.min(roadH, track.height[track.wrap(i + k)]);
-    }
-    // Follow the road's banking out to the wall.
+    // Road height here, following banking and per-route fork heights out to
+    // the wall. Under the road use the lowest nearby road height, so the coarse
+    // terrain grid can't poke up through bumps (whoops, ramp bases); under a
+    // fork island use the lower route so it stays below the island mound.
     const lat = Math.max(-wall, Math.min(wall, track.lateral(i, x, z)));
-    roadH += track.bank[i] * lat;
+    const iw = track.islandHw[i];
+    let roadH = iw > 0 && Math.abs(lat) < iw + 2
+      ? Math.min(track.roadHeight(i, -iw - 0.01), track.roadHeight(i, iw + 0.01))
+      : track.roadHeight(i, lat);
+    if (d < track.hw[i] + 3) {
+      for (let k = -6; k <= 6; k++) roadH = Math.min(roadH, track.roadHeight(track.wrap(i + k), lat));
+    }
     const w = smoothstep(d, wall + 2, wall + 50);
     const far = smoothstep(d, 90, 380);
     let free = hills(x, z) * (1 + far * 1.5) + 12 + far * ridges(x, z) * 1.6;
@@ -195,7 +197,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     free = lerp(-1, free, smoothstep(edge, 0, 120));
     let h = lerp(roadH - 0.3, free, w);
     // Hill over the tunnel: rises right outside the arch, fading at the portals.
-    for (const t of TUNNELS) {
+    for (const t of track.tunnels) {
       const tw = smoothstep(i, t.from - 4, t.from + 4) * (1 - smoothstep(i, t.to - 4, t.to + 4));
       if (tw > 0) {
         const W = wall + 0.6;

@@ -368,7 +368,7 @@ export class Car {
     if (!this.airborne && track.padAt(this.idx, lat)) this.boost = Math.max(this.boost, 0.9);
     const t = track.tan[this.idx];
     this.trackTan = t;
-    this.slope = track.slopeAt(this.idx) * (Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z);
+    this.slope = track.slopeAt(this.idx, lat) * (Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z);
   }
 
   updateVisual(dt) {

@@ -44,17 +44,19 @@ export class Hud {
     this.mapBg = document.createElement('canvas');
     this.mapBg.width = this.mapBg.height = size;
     const g = this.mapBg.getContext('2d');
-    const trace = () => {
+    // Two passes, one per fork route (they coincide outside forks).
+    const trace = (side) => {
       g.beginPath();
       track.pos.forEach((p, i) => {
-        const [x, y] = this.toMap(p.x, p.z);
+        const lat = side * track.forkO[i], r = track.right[i];
+        const [x, y] = this.toMap(p.x + r.x * lat, p.z + r.z * lat);
         i ? g.lineTo(x, y) : g.moveTo(x, y);
       });
       g.closePath();
     };
     g.lineJoin = 'round';
-    trace(); g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 12; g.stroke();
-    trace(); g.strokeStyle = '#f4f4f4'; g.lineWidth = 7; g.stroke();
+    for (const side of [-1, 1]) { trace(side); g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 10; g.stroke(); }
+    for (const side of [-1, 1]) { trace(side); g.strokeStyle = '#f4f4f4'; g.lineWidth = 5.5; g.stroke(); }
     const [sx, sy] = this.toMap(track.pos[0].x, track.pos[0].z);
     g.fillStyle = '#111';
     g.fillRect(sx - 2, sy - 7, 4, 14);

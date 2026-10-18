@@ -53,23 +53,29 @@ export class AIDriver {
     const ti = track.wrap(car.idx + Math.round(lookahead / track.spacing));
     const hw = track.hw[ti];
 
-    // Weave across the road (scaled to its width), but line up for an
-    // upcoming dash panel.
-    let lane = Math.sin(time * this.weaveFreq + this.phase) * hw * 0.5;
+    // Forks: pick a route once per visit (at random), and once alongside the
+    // island stick with the side you're actually on.
+    const forkId = track.forkId[ti] >= 0 ? track.forkId[ti] : track.forkId[car.idx];
+    let center = 0, half = hw;
+    if (forkId >= 0) {
+      if (this.forkFor !== forkId) {
+        this.forkFor = forkId;
+        this.forkSide = Math.random() < 0.5 ? -1 : 1;
+      }
+      if (track.islandHw[car.idx] > 0) this.forkSide = Math.sign(car.lateral || this.forkSide);
+      ({ center, half } = track.route(ti, this.forkSide));
+    } else {
+      this.forkFor = -1;
+    }
+
+    // Weave across the road/route, but line up for an upcoming dash panel
+    // that's on the route being driven.
+    let lane = center + Math.sin(time * this.weaveFreq + this.phase) * half * 0.5;
     for (const pad of track.pads) {
       const ahead = track.wrap(pad.at - car.idx) * track.spacing;
-      if (ahead > 0 && ahead < 70) lane = pad.lat;
+      if (ahead > 0 && ahead < 70 && Math.abs(pad.lat - center) < half) lane = pad.lat;
     }
-    lane = Math.max(-hw + 3, Math.min(hw - 3, lane + this.dodge));
-    // Pick a side of the median island when one is coming up.
-    // Once alongside it, stay on the side you're on (even if a pad is on
-    // the other side).
-    const iw = Math.max(track.islandHw[ti], track.islandHw[car.idx]);
-    if (iw > 0) {
-      const beside = track.islandHw[car.idx] > 0;
-      const side = beside ? Math.sign(car.lateral || 1) : Math.sign(lane || car.lateral || 1);
-      lane = Math.sign(lane) === side ? side * Math.max(Math.abs(lane), iw + 4) : side * (iw + 6);
-    }
+    lane = Math.max(center - half + 3, Math.min(center + half - 3, lane + this.dodge));
 
     const tp = track.pos[ti], tr = track.right[ti];
     const tx = tp.x + tr.x * lane, tz = tp.z + tr.z * lane;
