@@ -217,7 +217,8 @@ class Birds {
     const spots = [];
     const nSpots = 24;
     for (let s = 0; s < nSpots; s++) {
-      const i = Math.floor(((s + Math.random() * 0.6) / nSpots) * track.N) % track.N;
+      let i = Math.floor(((s + Math.random() * 0.6) / nSpots) * track.N) % track.N;
+      while (track.tunnelAt[i]) i = (i + 37) % track.N; // no birds in tunnels
       const side = Math.random() < 0.5 ? -1 : 1;
       const off = side * (track.wallOffset(i) + rand(6, 26));
       const p = track.pos[i], r = track.right[i];

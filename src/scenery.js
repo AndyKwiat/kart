@@ -54,8 +54,9 @@ export function buildScenery(scene, track) {
     for (let tries = 0; spots.length < count && tries < count * 30; tries++) {
       const x = THREE.MathUtils.lerp(b.min.x, b.max.x, Math.random());
       const z = THREE.MathUtils.lerp(b.min.z, b.max.z, Math.random());
-      const [, d, wall] = distToTrack(x, z);
+      const [i, d, wall] = distToTrack(x, z);
       if (d < wall + minD || d > wall + maxD || inWater(x, z)) continue;
+      if (track.tunnelAt[i] && d < wall + 40) continue;
       const y = heightAt(x, z);
       if (y > maxH) continue;
       spots.push([x, y, z]);
@@ -68,7 +69,7 @@ export function buildScenery(scene, track) {
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
-  buildVegetation(scene, { groundY, distToTrack, box, inWater, ponds });
+  buildVegetation(scene, { groundY, distToTrack, box, inWater, ponds, tunnelAt: track.tunnelAt });
 
   // Boulders: a few right behind the walls, more out in the hills.
   const rocks = [...scatter(140, 1.5, 12, 999, 40), ...scatter(160, 30, 260, 999, 200)];
@@ -92,8 +93,9 @@ export function buildScenery(scene, track) {
   // Where grazing animals may stand: grass, off the track, out of the lake,
   // below the rocky/snowy heights and not too steep.
   const pasture = (x, z) => {
-    const [, d, wall] = distToTrack(x, z);
+    const [i, d, wall] = distToTrack(x, z);
     if (d < wall + 8 || d > wall + 260 || inWater(x, z)) return false;
+    if (track.tunnelAt[i] && d < wall + 60) return false;
     const y = groundY(x, z);
     if (y > 55) return false;
     const slope = Math.abs(groundY(x + 2, z) - y) + Math.abs(groundY(x, z + 2) - y);
@@ -168,6 +170,23 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     return [best, Math.sqrt(bestD), track.wallOffset(best)];
   };
 
+  const longTunnels = track.tunnels.filter((t) => t.long);
+  // [nearest sample index along tunnel t, distance to its centreline]
+  const nearestOnTunnel = (t, x, z) => {
+    let best = t.from, bestD = Infinity;
+    for (let i = t.from; i <= t.to; i += 8) {
+      const p = track.pos[track.wrap(i)];
+      const d = (p.x - x) ** 2 + (p.z - z) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    for (let i = Math.max(t.from, best - 8); i <= Math.min(t.to, best + 8); i++) {
+      const p = track.pos[track.wrap(i)];
+      const d = (p.x - x) ** 2 + (p.z - z) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return [best, Math.sqrt(bestD)];
+  };
+
   const baseHeight = (x, z) => {
     const [i, d, wall] = distToTrack(x, z);
     // Road height here, following banking and per-route fork heights out to
@@ -185,6 +204,13 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     const w = smoothstep(d, wall + 2, wall + 50);
     const far = smoothstep(d, 90, 380);
     let free = hills(x, z) * (1 + far * 1.5) + 12 + far * ridges(x, z) * 1.6;
+    // A mountain over the long tunnel: rises steeply from the portals and
+    // peaks over the middle; the approach becomes a cutting into its flank.
+    for (const t of longTunnels) {
+      const [n, dT] = nearestOnTunnel(t, x, z);
+      const env = 0.6 + 0.4 * smoothstep(n, t.from, t.from + 150) * (1 - smoothstep(n, t.to - 150, t.to));
+      free += 58 * env * (1 - smoothstep(dT, 18, 240)) + ridges(x * 1.7, z * 1.7) * 0.25 * env * (1 - smoothstep(dT, 30, 200));
+    }
     if (lake) {
       const basin = 1 - smoothstep(Math.hypot(x - lake.x, z - lake.z), lake.r * 0.5, lake.r * 1.4);
       free = lerp(free, lake.level - 5, basin);
@@ -198,7 +224,10 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
       const tw = smoothstep(i, t.from - 4, t.from + 4) * (1 - smoothstep(i, t.to - 4, t.to + 4));
       if (tw > 0) {
         const W = wall + 0.6;
-        const mound = roadH - 0.3 + (t.height + 5) * smoothstep(d, W + 1, W + 9) * (1 - smoothstep(d, W + 35, W + 110));
+        // (the mound ramps in a few samples outside the tunnel; clamp into it)
+        const th = t.heightAt ? t.heightAt(Math.min(t.to, Math.max(t.from, i))) : t.height;
+        const face = t.long ? 14 : 5; // long tunnel: a tall cliff around the mouth
+        const mound = roadH - 0.3 + (th + face) * smoothstep(d, W + 1, W + 9) * (1 - smoothstep(d, W + 45, W + 140));
         h = Math.max(h, lerp(h, mound, tw));
       }
     }

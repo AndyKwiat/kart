@@ -366,6 +366,12 @@ export class Car {
       }
     }
     if (!this.airborne && track.padAt(this.idx, lat)) this.boost = Math.max(this.boost, 0.9);
+    // Tunnel roof: never fly through it.
+    const roof = track.ceil[this.idx] - 2.2;
+    if (this.y > roof) {
+      this.y = roof;
+      if (this.vy > 0) this.vy = 0;
+    }
     const t = track.tan[this.idx];
     this.trackTan = t;
     this.slope = track.slopeAt(this.idx, lat) * (Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z);

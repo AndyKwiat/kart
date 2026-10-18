@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon, canvasTexture } from './materials.js';
+import { buildTunnel } from './tunnel.js';
 import { roadTexture, stripeTexture, chevronTexture, padTexture, checkerTexture } from './textures.js';
 
 export const BASE_HALF_WIDTH = 18;
@@ -47,7 +48,8 @@ const FEATURES = [
   { at: 140, segs: [{ kick: 14, to: 3 }, { flat: 16 }, { ease: 22, to: 0 }] },
   { at: 500, side: 1, segs: [{ kick: 12, to: 2.5 }, { flat: 10 }, { ease: 18, to: 0 }] },
   { at: 990, segs: [{ kick: 20, to: 4 }, { flat: 18 }, { ease: 26, to: 0 }] },
-  { at: 1775, side: -1, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
+  { at: 1775, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
+  { at: 3895, side: -1, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
   { at: 1960, segs: [{ kick: 12, to: 2.5 }, { flat: 10 }, { kick: 10, to: 5 }, { flat: 14 }, { ease: 26, to: 0 }] },
   { at: 2715, side: -1, segs: [{ ease: 50, to: 9 }, { flat: 22 }, { ease: 50, to: 0 }] }, // hill route
   { at: 3150, segs: [{ kick: 16, to: 3.5 }, { flat: 16 }, { ease: 24, to: 0 }] },
@@ -61,9 +63,9 @@ const FEATURES = [
 // the half-width of each route, `ramp` the samples taken to split/merge.
 const FORKS = [
   { from: 400, to: 650, spread: 26, bw: 12, ramp: 60 },   // sweeper: pad vs kicker
-  { from: 1700, to: 1930, spread: 24, bw: 11, ramp: 55 }, // left valley: whoops vs pad
   { from: 2620, to: 3020, spread: 34, bw: 12, ramp: 70 }, // valley: over the hill vs round it
   { from: 3240, to: 3600, spread: 30, bw: 12, ramp: 60 }, // back straight: jump vs whoops
+  { from: 3850, to: 4060, spread: 24, bw: 11, ramp: 55 }, // downhill: whoops vs pad
 ];
 
 // Banked corners: the road tilts up toward the outside of the bend
@@ -74,9 +76,11 @@ const BANK_ZONES = [
   { from: 4080, to: 4240, slope: 0.3 },  // valley hairpin
 ];
 
-// Tunnels through hills: over the twisty chicane and the final S-bends.
+// Tunnels through hills: a long mountain tunnel and a short one on the final S-bends.
+// The long one runs through a mountain for about a quarter of the lap; its
+// ceiling height is worked out from jump trajectories (see computeCeiling).
 const TUNNELS = [
-  { from: 1180, to: 1268, height: 10 },
+  { from: 1110, to: 2310, long: true },
   { from: 4390, to: 4490, height: 10 },
 ];
 
@@ -86,7 +90,8 @@ const PADS = [
   { at: 270, lat: 9 },
   { at: 525, branch: -1 },
   { at: 960, lat: 0 },
-  { at: 1800, branch: 1 },
+  { at: 1740, lat: -6 },
+  { at: 3950, branch: 1 },
   { at: 2800, branch: 1 },
   { at: 3120, lat: 0 },
   { at: 3320, branch: -1 },
@@ -206,6 +211,13 @@ export class Track {
       return { at, lat, halfSamples: Math.round(PAD_HALF_LENGTH / this.spacing) };
     });
 
+    this.tunnelAt = new Uint8Array(this.N);
+    for (const t of this.tunnels) for (let i = t.from; i <= t.to; i++) this.tunnelAt[this.wrap(i)] = 1;
+
+    // Absolute ceiling height per sample inside long tunnels (Infinity elsewhere).
+    this.ceil = new Float32Array(this.N).fill(Infinity);
+    for (const t of this.tunnels) if (t.long) this.computeCeiling(t);
+
     this.group = new THREE.Group();
     this.buildRoad();
     this.buildCurbs();
@@ -213,8 +225,45 @@ export class Track {
     this.buildStartLine();
     this.buildJumpMarkings();
     this.buildPads();
-    for (const t of this.tunnels) this.buildTunnel(t);
+    for (const t of this.tunnels) buildTunnel(this, t);
     for (const f of this.forks) this.buildIsland(f);
+  }
+
+  // Ceiling for a long tunnel: fly a car along the centreline at several
+  // speeds (same launch/gravity rules as the car physics), take the highest
+  // point reached at each sample, add headroom, then smooth upward so the roof
+  // never dips below what's needed.
+  computeCeiling({ from, to }) {
+    const span = to - from;
+    const need = new Float32Array(span + 1).fill(-Infinity);
+    const top = (k) => Math.max(this.roadHeight(k, -this.hw[k]), this.roadHeight(k, 0), this.roadHeight(k, this.hw[k]));
+    const G = 32;
+    for (const v of [40, 55, 70, 85]) {
+      const dt = this.spacing / v;
+      let y = this.roadHeight(this.wrap(from - 220), 0), vy = 0, air = false;
+      for (let i = from - 220; i <= to; i++) {
+        const g = this.roadHeight(this.wrap(i), 0);
+        if (air) {
+          vy -= G * dt; y += vy * dt;
+          if (y <= g) { y = g; vy = 0; air = false; }
+        } else {
+          const yb = y + vy * dt - 0.5 * G * dt * dt;
+          if (vy > 2 && yb > g + 0.02) { air = true; y = yb; vy -= G * dt; }
+          else { vy = Math.max(-40, Math.min(40, (g - y) / dt)); y = g; }
+        }
+        if (i >= from) need[i - from] = Math.max(need[i - from], y);
+      }
+    }
+    const raw = [];
+    for (let n = 0; n <= span; n++) {
+      const k = this.wrap(from + n);
+      raw.push(Math.max(top(k) + 10.5, need[n] + 6));
+    }
+    const max = raw.map((_, n) => Math.max(...raw.slice(Math.max(0, n - 30), n + 31)));
+    for (let n = 0; n <= span; n++) {
+      const win = max.slice(Math.max(0, n - 20), n + 21);
+      this.ceil[this.wrap(from + n)] = win.reduce((a, b) => a + b, 0) / win.length;
+    }
   }
 
   // Bank slope per sample: tilts up toward the outside of the curve inside
@@ -443,86 +492,6 @@ export class Track {
       const geo = this.flatRibbon(pad.lat - PAD_HALF_WIDTH, pad.lat + PAD_HALF_WIDTH, 0.07, -PAD_HALF_LENGTH,
         pad.at - pad.halfSamples, pad.at + pad.halfSamples);
       this.group.add(new THREE.Mesh(geo, mat));
-    }
-  }
-
-  // Arched rock tunnel with ceiling lamps and stone portals. The hill around
-  // it comes from the terrain (see scenery.js).
-  buildTunnel({ from, to, height: H }) {
-    const M = 16;
-    const ring = (k, grow) => {
-      const W = this.wallOffset(k) + 0.6 + grow;
-      const p = this.pos[k], r = this.right[k];
-      const pts = [];
-      for (let m = 0; m <= M; m++) {
-        const a = (m / M) * Math.PI;
-        const lat = Math.cos(a) * W;
-        pts.push([p.x + r.x * lat, this.roadHeight(k, lat) - 0.4 + Math.sin(a) * (H + grow), p.z + r.z * lat]);
-      }
-      return pts;
-    };
-    const tube = (grow) => {
-      const positions = [];
-      const indices = [];
-      const rows = to - from + 1;
-      for (let n = 0; n < rows; n++) for (const v of ring(this.wrap(from + n), grow)) positions.push(...v);
-      for (let n = 0; n < rows - 1; n++) {
-        for (let m = 0; m < M; m++) {
-          const a = n * (M + 1) + m, b = a + 1, c = a + M + 1, d = c + 1;
-          indices.push(a, c, b, b, c, d);
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      g.setIndex(indices);
-      g.computeVertexNormals();
-      return g;
-    };
-    const rock = toon(0x5e5853, { side: THREE.DoubleSide });
-    const inner = new THREE.Mesh(tube(0), rock);
-    inner.castShadow = inner.receiveShadow = true;
-    this.group.add(inner);
-
-    // Portals: stone band between the inner arch and a thicker outer arch.
-    const stone = toon(0xb9b2a6, { side: THREE.DoubleSide, flatShading: true });
-    for (const k of [from, to]) {
-      const a = ring(k, 0), b = ring(k, 3);
-      const positions = [...a.flat(), ...b.flat()];
-      const indices = [];
-      for (let m = 0; m < M; m++) indices.push(m, M + 1 + m, m + 1, m + 1, M + 1 + m, M + 2 + m);
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      g.setIndex(indices);
-      g.computeVertexNormals();
-      const portal = new THREE.Mesh(g, stone);
-      portal.castShadow = true;
-      this.group.add(portal);
-    }
-
-    // Darken the floor inside (the sky light alone washes out the shadow),
-    // fading in from each portal.
-    const fade = 10;
-    const shadeGeo = this.flatRibbon((k) => -this.wallOffset(k), (k) => this.wallOffset(k), 0.09, 10, from - 2, to + 2);
-    const alpha = new Float32Array((to - from + 5) * 2 * 4);
-    for (let n = 0; n < to - from + 5; n++) {
-      const t = Math.min(n, to - from + 4 - n) / fade;
-      const a = 0.5 * Math.min(1, Math.max(0, t));
-      alpha.set([0, 0, 0, a, 0, 0, 0, a], n * 8);
-    }
-    shadeGeo.setAttribute('color', new THREE.BufferAttribute(alpha, 4));
-    this.group.add(new THREE.Mesh(shadeGeo, new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, depthWrite: false,
-    })));
-
-    const lampGeo = new THREE.BoxGeometry(2.4, 0.25, 0.8);
-    const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 2.7, 2) });
-    for (let k = from + 6; k < to - 3; k += 9) {
-      const i = this.wrap(k);
-      const lamp = new THREE.Mesh(lampGeo, lampMat);
-      const p = this.pos[i];
-      lamp.position.set(p.x, this.roadHeight(i, 0) - 0.4 + H - 0.2, p.z);
-      lamp.rotation.y = this.headingAt(i);
-      this.group.add(lamp);
     }
   }
 

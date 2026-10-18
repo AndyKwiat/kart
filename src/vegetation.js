@@ -122,8 +122,9 @@ function tree(scene, model, spots) {
 export function buildVegetation(scene, world) {
   const { groundY, distToTrack, box, inWater } = world;
   const ok = (x, z, minD, maxD, maxH) => {
-    const [, d, wall] = distToTrack(x, z);
+    const [i, d, wall] = distToTrack(x, z);
     if (d < wall + minD || d > wall + maxD || inWater(x, z)) return null;
+    if (world.tunnelAt[i] && d < wall + 40) return null; // nothing over/around tunnels
     const y = groundY(x, z);
     return y > maxH ? null : y;
   };
