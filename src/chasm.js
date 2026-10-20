@@ -6,7 +6,6 @@ import { hazardTexture } from './textures.js';
 // cliff edges and glowing edge markers. The canyon itself is carved into the
 // terrain (scenery.js).
 
-
 export function buildChasm(track, gap) {
   const group = track.group;
   const at = (k, lat, up = 0) => {

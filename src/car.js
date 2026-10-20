@@ -14,6 +14,42 @@ const STEER_RATE = 2.3;
 const BOOST_MULT = 1.32;
 // Scales how hard a drift swings the car (turn rate, outward slide, visual angle).
 const DRIFT_STRENGTH = 0.7;
+// Tyre grip: the most sideways acceleration the tyres can provide. Plenty at
+// low and medium speed (steering stays crisp), dropping toward GRIP_TOP near
+// top speed, so a hard turn flat out makes the car skid wide. Shared by the
+// player and the AI. Drifting uses its own handling and isn't limited.
+const GRIP_TOP = 46;
+const GRIP_LOW = 95;
+export function gripLimit({ speed = 0, throttle = true, bank = 0, offroad = false } = {}) {
+  const t = Math.min(1, Math.max(0, (Math.abs(speed) - 32) / 20));
+  let a = GRIP_TOP + (GRIP_LOW - GRIP_TOP) * (1 - t * t * (3 - 2 * t));
+  a *= 1 + 1.5 * Math.abs(bank);
+  if (!throttle) a *= 1.1;
+  if (offroad) a *= 0.8;
+  return a;
+}
+
+// Fastest speed a bend of radius R can be taken at without skidding
+// (memoised: the AI asks this a lot).
+const cornerCache = new Map();
+export function cornerSpeed(radius, opts = {}) {
+  const key = `${Math.round(radius)}|${Math.round((opts.bank ?? 0) * 100)}`;
+  let v = cornerCache.get(key);
+  if (v === undefined) {
+    v = solveCornerSpeed(Math.round(radius), opts);
+    cornerCache.set(key, v);
+  }
+  return v;
+}
+function solveCornerSpeed(radius, opts) {
+  let lo = 5, hi = 140;
+  for (let n = 0; n < 14; n++) {
+    const v = (lo + hi) / 2;
+    if (v * v / radius > gripLimit({ ...opts, speed: v })) hi = v; else lo = v;
+  }
+  return lo;
+}
+const PUSH_MULT = 1.06; // gentle shove when rear-ended
 const GRAVITY = 32;
 
 const WHEEL_R = 0.55;
@@ -182,6 +218,8 @@ export class Car {
     this.vy = 0;
     this.airborne = false;
     this.squash = 0;
+    this.push = 0;
+    this.skid = 0;
     this.onIsland = false;
     this.outside = false; // flew over the wall and is off the track
     this.outTime = 0;
@@ -242,7 +280,12 @@ export class Car {
       top *= BOOST_MULT;
       vf += ACCEL * 1.5 * dt;
       this.boost -= dt;
+    } else if (this.push > 0) {
+      // Being rear-ended: a weaker cousin of a boost.
+      top *= PUSH_MULT;
+      vf += ACCEL * 0.5 * dt;
     }
+    this.push = Math.max(0, this.push - dt);
 
     if (this.airborne) {
       // Momentum carries you through the air; no throttle or brakes.
@@ -268,14 +311,29 @@ export class Car {
     if (this.airborne) yawRate *= 0.35;
     // Banked corners let you carry more speed through the turn.
     else yawRate *= 1 + 1.6 * Math.abs(this.bankSlope);
+    const wx = fx * vf + rx * vl, wz = fz * vf + rz * vl; // velocity before turning
     this.heading = wrapAngle(this.heading - yawRate * dt);
-
-    // Lateral grip: strong normally, loose while drifting (car slides outward).
-    if (this.drifting) vl -= this.driftDir * Math.abs(vf) * 0.45 * DRIFT_STRENGTH * dt;
-    vl *= Math.exp(-(this.drifting ? 2.5 : 10) * dt);
-
     fx = Math.sin(this.heading); fz = Math.cos(this.heading);
     rx = -fz; rz = fx;
+
+    if (this.drifting || this.airborne) {
+      // Drifting (and flying) keep the arcade handling: the motion turns with
+      // the car; drifts slide outward with loose lateral grip.
+      if (this.drifting) vl -= this.driftDir * Math.abs(vf) * 0.45 * DRIFT_STRENGTH * dt;
+      vl *= Math.exp(-(this.drifting ? 2.5 : 10) * dt);
+      this.skid = 0;
+    } else {
+      // Tyres: the car's motion stays where it was while the nose turns; the
+      // tyres pull it round, but only up to the grip limit. Turn harder than
+      // that and the car skids wide (which also scrubs off speed).
+      vf = wx * fx + wz * fz;
+      vl = wx * rx + wz * rz;
+      const want = vl * (1 - Math.exp(-30 * dt));
+      const cap = gripLimit({ speed: vf, throttle: input.throttle, bank: this.bankSlope, offroad: this.offroad }) * dt;
+      vl -= Math.max(-cap, Math.min(cap, want));
+      this.skid = Math.abs(vl);
+      if (this.skid > 1.5) vf -= Math.sign(vf) * Math.min(Math.abs(vf), this.skid * 1.1 * dt);
+    }
     this.vx = fx * vf + rx * vl;
     this.vz = fz * vf + rz * vl;
     this.speed = vf;
@@ -533,6 +591,24 @@ export function collideCars(cars) {
         const jImp = (-(1 + 0.3) * rv) / 2;
         a.vx -= nx * jImp; a.vz -= nz * jImp;
         b.vx += nx * jImp; b.vz += nz * jImp;
+
+        // Bump rules: contact costs speed, except that the car that gets
+        // rear-ended is shoved along (reward for keeping rivals behind you).
+        const strength = Math.min(1, -rv / 10);
+        const fa = [Math.sin(a.heading), Math.cos(a.heading)], fb = [Math.sin(b.heading), Math.cos(b.heading)];
+        const sameWay = fa[0] * fb[0] + fa[1] * fb[1] > 0.5;
+        const slow = (car, k) => { car.vx *= 1 - k * strength; car.vz *= 1 - k * strength; };
+        let rear = null, front = null;
+        if (sameWay && nx * fa[0] + nz * fa[1] > 0.7) { rear = a; front = b; }
+        else if (sameWay && -(nx * fb[0] + nz * fb[1]) > 0.7) { rear = b; front = a; }
+        if (rear) {
+          slow(rear, 0.08);
+          front.push = Math.max(front.push, 0.6 * strength + 0.2);
+          front.pushed = true;
+        } else {
+          slow(a, 0.05);
+          slow(b, 0.05);
+        }
       }
     }
   }

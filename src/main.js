@@ -107,8 +107,6 @@ const cars = [...COLORS.map((c, i) => new Car(c, `CPU ${i + 1}`)), player];
 // CPU 7 keeps the default top speed with a little less skill.
 for (const car of cars.slice(0, 4)) car.maxSpeed = player.maxSpeed * 1.2;
 for (const car of cars.slice(4, 6)) car.maxSpeed = player.maxSpeed * 1.1;
-// Every opponent a further 5% faster.
-for (const car of cars) if (car !== player) car.maxSpeed *= 1.05;
 const FULL_SKILL = new Set(cars.slice(0, 6));
 for (const car of cars) scene.add(car.mesh);
 const drivers = new Map();
@@ -303,6 +301,7 @@ function updateHud() {
   });
   if (state === 'finished' && clock - finishShownAt > 1.5) hud.showResults(order, player);
   hud.drawMinimap(cars, player);
+  hud.drawRadar(cars, player, track, clock);
 }
 
 let last = performance.now();

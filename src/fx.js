@@ -145,6 +145,16 @@ export class Effects {
     }
     car.impacts.length = 0;
 
+    // Shoved from behind: a little puff of blue sparks off the back.
+    if (car.pushed) {
+      if (near) {
+        const fx0 = Math.sin(car.heading), fz0 = Math.cos(car.heading);
+        for (let i = 0; i < 10; i++) {
+          this.glow.emit(car.x - fx0 * 2, car.y + 0.6, car.z - fz0 * 2, car.vx + rnd(4), 1 + Math.random() * 3, car.vz + rnd(4), P.driftBlue);
+        }
+      }
+      car.pushed = false;
+    }
     if (car.respawned && near) {
       for (let i = 0; i < 18; i++) {
         const a = (i / 18) * Math.PI * 2;
@@ -175,6 +185,13 @@ export class Effects {
           const [x, y, z] = rear(side);
           this.glow.emit(x, y, z, vx * 0.85 - fx * 3 + rx * side * 1.5 + rnd(2.5), 1.5 + Math.random() * 3, vz * 0.85 - fz * 3 + rz * side * 1.5 + rnd(2.5), p);
           if (Math.random() < 0.5) this.puff.emit(x, y, z, vx * 0.3 + rnd(1), 0.5, vz * 0.3 + rnd(1), P.smoke);
+        }
+      }
+      // Skidding wide: tyre smoke off the rear wheels.
+      if (car.skid > 4 && !car.airborne && Math.random() < Math.min(1, car.skid / 12)) {
+        for (const side of [-1.25, 1.25]) {
+          const [x, y, z] = rear(side);
+          this.puff.emit(x, y, z, vx * 0.3 + rnd(1.5), 0.6, vz * 0.3 + rnd(1.5), P.smoke);
         }
       }
       if (car.boost > 0) {

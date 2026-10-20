@@ -1,3 +1,25 @@
+import { cornerSpeed } from './car.js';
+
+const BRAKING = 26; // deceleration the AI plans its braking around
+
+// Signed curvature per sample (+ = bending right), smoothed; cached per track.
+const curvCache = new WeakMap();
+function curvature(track) {
+  let c = curvCache.get(track);
+  if (c) return c;
+  const raw = [];
+  for (let i = 0; i < track.N; i++) {
+    const a = track.tan[track.wrap(i - 6)], b = track.tan[track.wrap(i + 6)], r = track.right[i];
+    raw.push(((b.x - a.x) * r.x + (b.z - a.z) * r.z) / (12 * track.spacing));
+  }
+  c = raw.map((_, i) => {
+    let sum = 0;
+    for (let k = -5; k <= 5; k++) sum += raw[track.wrap(i + k)];
+    return sum / 11;
+  });
+  curvCache.set(track, c);
+  return c;
+}
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -83,25 +105,27 @@ export class AIDriver {
     const diff = wrapAngle(desired - car.heading);
     out.steer = Math.max(-1, Math.min(1, -diff * 3));
 
-    // Slow for upcoming bends.
-    const t0 = track.tan[car.idx];
-    let bend = 0;
-    for (const dist of [15, 30, 45]) {
-      const t1 = track.tan[track.wrap(car.idx + Math.round(dist / track.spacing))];
-      bend = Math.max(bend, Math.acos(Math.max(-1, Math.min(1, t0.x * t1.x + t0.z * t1.z))));
+    // Corner speed: the AI obeys the same grip limit as the player, so it
+    // looks ahead and slows enough to make each bend on its current line,
+    // braking early enough (v² = v_corner² + 2·decel·distance).
+    const curv = curvature(track);
+    let allowed = Infinity;
+    for (let d = 0; d <= 110; d += 2.5) {
+      const j = track.wrap(car.idx + Math.round(d / track.spacing));
+      const k = curv[j];
+      // (a racing line across the road's width opens the corner up a bit)
+      const radius = Math.max(8, 1 / Math.max(1e-4, Math.abs(k)) - Math.sign(k) * car.lateral + track.hw[j] * 0.5);
+      const vCorner = cornerSpeed(radius, { bank: track.bank[j] });
+      allowed = Math.min(allowed, Math.sqrt(vCorner * vCorner + 2 * BRAKING * d));
     }
     // Light rubber-banding keeps the pack close to the player.
     let rubber = 1;
     if (leaderGap > 120) rubber = 1.07;
     else if (leaderGap < -250) rubber = 0.94;
 
-    // Banked corners can be taken faster.
-    const bankAhead = Math.max(Math.abs(track.bank[car.idx]), Math.abs(track.bank[track.wrap(car.idx + Math.round(25 / track.spacing))]));
-    const bankRelief = 1 - Math.min(0.7, bankAhead * 2.5);
-    const penalty = Math.min(0.42, Math.max(0, bend - 0.25) * 0.5) * bankRelief;
-    const targetSpeed = car.maxSpeed * this.skill * rubber * (1 - penalty);
+    const targetSpeed = Math.min(car.maxSpeed * this.skill * rubber, allowed);
     out.throttle = speed < targetSpeed;
-    out.brake = speed > targetSpeed + 5;
+    out.brake = speed > targetSpeed + 2;
     return out;
   }
 }
