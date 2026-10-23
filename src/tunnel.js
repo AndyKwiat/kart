@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { toon } from './materials.js';
 import {
   rockWallTexture, panelWallTexture, neonTileTexture, crystalRockTexture, concreteFloorTexture,
-  hazardTexture, dashTexture, arrowSignTexture, posterTextures, glowTexture, bannerTexture,
+  hazardTexture, dashTexture, arrowSignTexture, posterTextures, glowTexture, bannerTexture, templeWallTexture,
 } from './textures.js';
 
 // Tunnels: an arched shell following the road (height can vary per sample),
@@ -14,12 +14,15 @@ import {
 const rand = (a, b) => a + Math.random() * (b - a);
 const glow = (hex, k) => new THREE.Color(hex).multiplyScalar(k);
 
-const THEMES = [
-  { name: 'rock', wall: rockWallTexture, pool: 0xffb35c, arrow: '#ffb020', lamps: true },
-  { name: 'industrial', wall: panelWallTexture, pool: 0xd8ecff, arrow: '#ffd23f', strip: 0xe8f4ff, hazard: true, posters: true, ribs: true },
-  { name: 'neon', wall: neonTileTexture, pool: 0xff4fd8, arrow: '#33f0ff', neon: [0x33f0ff, 0xff4fd8], posters: true },
-  { name: 'crystal', wall: crystalRockTexture, pool: 0x9a6bff, arrow: '#c58bff', crystals: true },
-];
+// Interior styles; a track's theme lists which ones its long tunnel uses, in
+// order (short tunnels use the first).
+const INTERIORS = {
+  rock: { wall: rockWallTexture, pool: 0xffb35c, arrow: '#ffb020', lamps: true },
+  industrial: { wall: panelWallTexture, pool: 0xd8ecff, arrow: '#ffd23f', strip: 0xe8f4ff, hazard: true, posters: true, ribs: true },
+  neon: { wall: neonTileTexture, pool: 0xff4fd8, arrow: '#33f0ff', neon: [0x33f0ff, 0xff4fd8], posters: true },
+  crystal: { wall: crystalRockTexture, pool: 0x9a6bff, arrow: '#c58bff', crystals: true },
+  temple: { wall: templeWallTexture, pool: 0xffa040, arrow: '#ffb020', lamps: true, ribs: true },
+};
 
 export function buildTunnel(track, t) {
   const group = track.group;
@@ -116,7 +119,8 @@ export function buildTunnel(track, t) {
   };
 
   const glowTex = glowTexture();
-  const themes = t.long ? THEMES : [THEMES[0]];
+  const styles = track.theme.tunnel.map((name) => INTERIORS[name]);
+  const themes = t.long ? styles : [styles[0]];
   const segLen = Math.ceil(span / themes.length);
 
   themes.forEach((theme, s) => {
@@ -270,7 +274,7 @@ export function buildTunnel(track, t) {
     const top = surf(k, 0.5, 2.5);
     const banner = new THREE.Mesh(new THREE.BoxGeometry(W(k) * 1.3, 3.2, 0.8), [
       stone, stone, stone, stone,
-      new THREE.MeshBasicMaterial({ map: bannerTexture('MOUNTAIN TUNNEL'), color: glow(0xffffff, 1.15) }), stone,
+      new THREE.MeshBasicMaterial({ map: bannerTexture(track.theme.tunnelBanner), color: glow(0xffffff, 1.15) }), stone,
     ]);
     banner.position.copy(top).addScaledVector(track.tan[k], dir * 1.2);
     banner.rotation.y = track.headingAt(k) + (dir < 0 ? Math.PI : 0);
@@ -301,7 +305,7 @@ export function buildTunnel(track, t) {
   // Rocky cap over a long tunnel, so from outside it reads as mountain, not a tube.
   if (t.long) {
     const COLS = 10, pos = [], col = [], idx = [];
-    const grass = new THREE.Color(0x4f9e3a), rockC = new THREE.Color(0x837c74), c = new THREE.Color();
+    const grass = new THREE.Color(track.theme.terrain.darkGrass), rockC = new THREE.Color(track.theme.terrain.rock), c = new THREE.Color();
     for (let n = 0; n <= span; n++) {
       const k = K(n);
       const w = W(k) + 10, p = track.pos[k], r = track.right[k];

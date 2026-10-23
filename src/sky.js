@@ -1,23 +1,17 @@
 import * as THREE from 'three';
 import { toon } from './materials.js';
 
-export const SKY = {
-  top: new THREE.Color(0x2f8ef0),
-  horizon: new THREE.Color(0xcdeeff),
-  bottom: new THREE.Color(0x9ccf86),
-  sunDir: new THREE.Vector3(0.45, 0.75, 0.3).normalize(),
-};
-
-function skyMaterial() {
+// `sky` = theme.sky: { top, horizon, bottom (Colors), sun (direction) }.
+function skyMaterial(sky) {
   return new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     fog: false,
     uniforms: {
-      top: { value: SKY.top },
-      horizon: { value: SKY.horizon },
-      bottom: { value: SKY.bottom },
-      sunDir: { value: SKY.sunDir },
+      top: { value: sky.top },
+      horizon: { value: sky.horizon },
+      bottom: { value: sky.bottom },
+      sunDir: { value: sky.sun.clone().normalize() },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
@@ -45,24 +39,27 @@ function skyMaterial() {
 // Gradient sky dome with a sun, fluffy clouds, and an environment map baked
 // from the same sky so glossy materials pick up matching reflections.
 export class Sky {
-  constructor(scene, renderer, center) {
+  constructor(scene, renderer, center, theme) {
     scene.background = null;
-    this.dome = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), skyMaterial());
+    this.sunDir = theme.sky.sun.clone().normalize();
+    this.dome = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), skyMaterial(theme.sky));
     this.dome.scale.setScalar(1800);
     this.dome.frustumCulled = false;
     this.dome.renderOrder = -1;
     scene.add(this.dome);
 
     const envScene = new THREE.Scene();
-    const envDome = new THREE.Mesh(new THREE.SphereGeometry(50, 48, 24), skyMaterial());
+    const envDome = new THREE.Mesh(new THREE.SphereGeometry(50, 48, 24), skyMaterial(theme.sky));
     envScene.add(envDome);
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(envScene, 0.02).texture;
     pmrem.dispose();
+    envDome.geometry.dispose();
+    envDome.material.dispose();
 
     // Clouds: clusters of puffs, slowly drifting.
     const puffs = [];
-    for (let c = 0; c < 34; c++) {
+    for (let c = 0; c < theme.clouds.count; c++) {
       const a = Math.random() * Math.PI * 2;
       const r = 350 + Math.random() * 650;
       const cx = center.x + Math.cos(a) * r, cz = center.z + Math.sin(a) * r;
@@ -81,7 +78,7 @@ export class Sky {
     }
     this.clouds = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(1, 3),
-      toon(0xffffff, { fog: false, emissive: 0x8899aa, emissiveIntensity: 0.35 }),
+      toon(theme.clouds.color, { fog: false, emissive: theme.clouds.emissive, emissiveIntensity: 0.35 }),
       puffs.length,
     );
     const m = new THREE.Matrix4();

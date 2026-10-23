@@ -76,6 +76,68 @@ function sheepModel() {
   return { body, head, neck: new THREE.Vector3(0, 1.25, 0.95), walk: 1.3, scale: 0.95 };
 }
 
+function elephantModel() {
+  const G = 0x8d8a92, D = 0x6f6c75;
+  const body = mergeGeometries([
+    part(rbox(2.6, 2.4, 4, 0.8), G, 0, 3, 0),
+    ...[[-0.8, 1.2], [0.8, 1.2], [-0.8, -1.2], [0.8, -1.2]].map(([x, z]) => part(new THREE.CylinderGeometry(0.5, 0.55, 2.2, 8), D, x, 1.1, z)),
+    part(new THREE.CylinderGeometry(0.06, 0.1, 1.4, 5), D, 0, 2.6, -2.1, { rx: 0.4 }),
+  ]);
+  const head = mergeGeometries([
+    part(rbox(1.9, 1.9, 1.7, 0.6), G, 0, 0.2, 0.7),
+    part(new THREE.BoxGeometry(0.2, 1.8, 1.5), D, 1.2, 0.3, 0.3, { ry: -0.4 }),
+    part(new THREE.BoxGeometry(0.2, 1.8, 1.5), D, -1.2, 0.3, 0.3, { ry: 0.4 }),
+    part(new THREE.CylinderGeometry(0.22, 0.4, 2.6, 8), G, 0, -1, 1.55, { rx: -0.25 }),
+    part(new THREE.ConeGeometry(0.12, 1.1, 6), 0xf4efe2, 0.45, -0.5, 1.5, { rx: -1.9 }),
+    part(new THREE.ConeGeometry(0.12, 1.1, 6), 0xf4efe2, -0.45, -0.5, 1.5, { rx: -1.9 }),
+    part(new THREE.BoxGeometry(0.15, 0.15, 0.06), 0x111111, 0.55, 0.55, 1.55),
+    part(new THREE.BoxGeometry(0.15, 0.15, 0.06), 0x111111, -0.55, 0.55, 1.55),
+  ]);
+  return { body, head, neck: new THREE.Vector3(0, 3.4, 2), walk: 0.9, scale: 1.1 };
+}
+
+function penguinModel() {
+  const K = 0x1e2028, W = 0xf6f6f2, O = 0xff9a1a;
+  const body = mergeGeometries([
+    part(ball, K, 0, 0.75, 0, { sx: 0.45, sy: 0.7, sz: 0.4 }),
+    part(ball, W, 0, 0.72, 0.16, { sx: 0.34, sy: 0.58, sz: 0.3 }),
+    part(new THREE.BoxGeometry(0.5, 0.06, 0.3), O, 0, 0.03, 0.12),
+    part(new THREE.BoxGeometry(0.1, 0.5, 0.25), K, 0.42, 0.75, 0, { rz: 0.3 }),
+    part(new THREE.BoxGeometry(0.1, 0.5, 0.25), K, -0.42, 0.75, 0, { rz: -0.3 }),
+  ]);
+  const head = mergeGeometries([
+    part(ball, K, 0, 0.15, 0.05, { sx: 0.28, sy: 0.27, sz: 0.27 }),
+    part(new THREE.ConeGeometry(0.07, 0.25, 5), O, 0, 0.12, 0.35, { rx: Math.PI / 2 }),
+    part(ball, W, 0.12, 0.2, 0.2, { sx: 0.06, sy: 0.06, sz: 0.06 }),
+    part(ball, W, -0.12, 0.2, 0.2, { sx: 0.06, sy: 0.06, sz: 0.06 }),
+  ]);
+  return { body, head, neck: new THREE.Vector3(0, 1.35, 0.05), walk: 0.7, scale: 1.3 };
+}
+
+function reindeerModel() {
+  const B = 0x8a5a36, L = 0xe8dcc6, A = 0xcbb48a;
+  const body = mergeGeometries([
+    part(rbox(1.1, 1.0, 2.2, 0.35), B, 0, 1.55, 0),
+    part(ball, L, 0, 1.6, -1.15, { sx: 0.25, sy: 0.25, sz: 0.2 }),
+    ...[[-0.35, 0.75], [0.35, 0.75], [-0.35, -0.75], [0.35, -0.75]].map(([x, z]) => part(new THREE.BoxGeometry(0.16, 1.2, 0.16), 0x5a3a22, x, 0.6, z)),
+  ]);
+  const antler = (sx) => [
+    part(new THREE.CylinderGeometry(0.04, 0.05, 0.9, 4), A, sx * 0.3, 0.75, 0, { rz: -sx * 0.4 }),
+    part(new THREE.CylinderGeometry(0.03, 0.04, 0.5, 4), A, sx * 0.55, 1.05, 0.15, { rz: -sx * 0.9, rx: -0.4 }),
+    part(new THREE.CylinderGeometry(0.03, 0.04, 0.5, 4), A, sx * 0.45, 1.15, -0.2, { rz: -sx * 0.2, rx: 0.5 }),
+  ];
+  const head = mergeGeometries([
+    part(rbox(0.45, 0.5, 0.9, 0.15), B, 0, 0.2, 0.4),
+    part(ball, 0x222222, 0, 0.12, 0.88, { sx: 0.1, sy: 0.1, sz: 0.08 }),
+    part(new THREE.BoxGeometry(0.25, 0.1, 0.12), B, 0.3, 0.45, 0.15),
+    part(new THREE.BoxGeometry(0.25, 0.1, 0.12), B, -0.3, 0.45, 0.15),
+    ...antler(1), ...antler(-1),
+  ]);
+  return { body, head, neck: new THREE.Vector3(0, 2.0, 1.0), walk: 1.2, scale: 1 };
+}
+
+const HERD_MODELS = { cow: cowModel, sheep: sheepModel, elephant: elephantModel, penguin: penguinModel, reindeer: reindeerModel };
+
 // Bird facing +z. Body is white (tinted per instance); wings pivot at the body.
 function birdModel() {
   const body = mergeGeometries([
@@ -186,17 +248,17 @@ class Herds {
 
 // --- Birds ----------------------------------------------------------------------
 
-const BIRD_COLORS = [0xf4f4f4, 0xf4f4f4, 0x2c2c36, 0x2c2c36, 0x8b6b4a, 0x4a7fd6, 0xd9d2c0, 0x5a5f6a];
 
 class Birds {
-  constructor(scene, world, track) {
+  constructor(scene, world, track, cfg) {
     this.world = world;
     this.birds = [];
+    const BIRD_COLORS = cfg.palette;
 
     // High flocks drifting across the sky in loose V formations.
     this.flocks = [];
     const c = world.box.getCenter(new THREE.Vector3());
-    for (let f = 0; f < 10; f++) {
+    for (let f = 0; f < cfg.flocks; f++) {
       const flock = {
         cx: c.x + rand(-500, 500), cz: c.z + rand(-500, 500), r: rand(250, 600),
         w: rand(0.02, 0.05) * (Math.random() < 0.5 ? -1 : 1), phase: rand(0, 6.3),
@@ -215,7 +277,7 @@ class Birds {
 
     // Spots along the roadside: birds circling overhead and birds on the ground.
     const spots = [];
-    const nSpots = 24;
+    const nSpots = cfg.spots;
     for (let s = 0; s < nSpots; s++) {
       let i = Math.floor(((s + Math.random() * 0.6) / nSpots) * track.N) % track.N;
       while (track.tunnelAt[i]) i = (i + 37) % track.N; // no birds in tunnels
@@ -379,21 +441,24 @@ class Birds {
 }
 
 export class Wildlife {
+  // Herds and birds as listed in the track's theme.
   constructor(scene, world, track) {
     this.time = 0;
-    this.cows = new Herds(scene, world, cowModel(), 8, [5, 9]);
-    this.sheep = new Herds(scene, world, sheepModel(), 10, [7, 13]);
-    this.birds = new Birds(scene, world, track);
+    const theme = track.theme;
+    this.herds = theme.herds.map((h) => new Herds(scene, world, HERD_MODELS[h.kind](), h.herds, h.per));
+    this.kinds = theme.herds.map((h) => h.kind);
+    this.birds = new Birds(scene, world, track, theme.birds);
   }
 
   get counts() {
-    return { cows: this.cows.animals.length, sheep: this.sheep.animals.length, birds: this.birds.birds.length };
+    const out = { birds: this.birds.birds.length };
+    this.herds.forEach((h, k) => { out[this.kinds[k]] = h.animals.length; });
+    return out;
   }
 
   update(dt, cars) {
     this.time += dt;
-    this.cows.update(dt, this.time);
-    this.sheep.update(dt, this.time);
+    for (const h of this.herds) h.update(dt, this.time);
     this.birds.update(dt, this.time, cars);
   }
 }

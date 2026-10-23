@@ -20,12 +20,13 @@ const DRIFT_STRENGTH = 0.7;
 // player and the AI. Drifting uses its own handling and isn't limited.
 const GRIP_TOP = 46;
 const GRIP_LOW = 95;
-export function gripLimit({ speed = 0, throttle = true, bank = 0, offroad = false } = {}) {
+export function gripLimit({ speed = 0, throttle = true, bank = 0, offroad = false, ice = false } = {}) {
   const t = Math.min(1, Math.max(0, (Math.abs(speed) - 32) / 20));
   let a = GRIP_TOP + (GRIP_LOW - GRIP_TOP) * (1 - t * t * (3 - 2 * t));
   a *= 1 + 1.5 * Math.abs(bank);
   if (!throttle) a *= 1.1;
   if (offroad) a *= 0.8;
+  if (ice) a *= 0.45;
   return a;
 }
 
@@ -33,7 +34,7 @@ export function gripLimit({ speed = 0, throttle = true, bank = 0, offroad = fals
 // (memoised: the AI asks this a lot).
 const cornerCache = new Map();
 export function cornerSpeed(radius, opts = {}) {
-  const key = `${Math.round(radius)}|${Math.round((opts.bank ?? 0) * 100)}`;
+  const key = `${Math.round(radius)}|${Math.round((opts.bank ?? 0) * 100)}|${opts.ice ? 1 : 0}`;
   let v = cornerCache.get(key);
   if (v === undefined) {
     v = solveCornerSpeed(Math.round(radius), opts);
@@ -329,7 +330,7 @@ export class Car {
       vf = wx * fx + wz * fz;
       vl = wx * rx + wz * rz;
       const want = vl * (1 - Math.exp(-30 * dt));
-      const cap = gripLimit({ speed: vf, throttle: input.throttle, bank: this.bankSlope, offroad: this.offroad }) * dt;
+      const cap = gripLimit({ speed: vf, throttle: input.throttle, bank: this.bankSlope, offroad: this.offroad, ice: this.onIce }) * dt;
       vl -= Math.max(-cap, Math.min(cap, want));
       this.skid = Math.abs(vl);
       if (this.skid > 1.5) vf -= Math.sign(vf) * Math.min(Math.abs(vf), this.skid * 1.1 * dt);
@@ -413,6 +414,7 @@ export class Car {
     }
     this.lateral = lat;
     this.bankSlope = this.outside ? 0 : track.bank[this.idx];
+    this.onIce = !this.outside && !!track.iceAt[this.idx];
     this.offroad = this.outside || Math.abs(lat) > track.hw[this.idx] + CURB_WIDTH;
 
     // Ground: road, island mound, or the terrain when off the track.

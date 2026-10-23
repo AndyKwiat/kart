@@ -115,7 +115,7 @@ export class AIDriver {
       const k = curv[j];
       // (a racing line across the road's width opens the corner up a bit)
       const radius = Math.max(8, 1 / Math.max(1e-4, Math.abs(k)) - Math.sign(k) * car.lateral + track.hw[j] * 0.5);
-      const vCorner = cornerSpeed(radius, { bank: track.bank[j] });
+      const vCorner = cornerSpeed(radius, { bank: track.bank[j], ice: !!track.iceAt[j] });
       allowed = Math.min(allowed, Math.sqrt(vCorner * vCorner + 2 * BRAKING * d));
     }
     // Light rubber-banding keeps the pack close to the player.

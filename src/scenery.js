@@ -2,14 +2,17 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from './materials.js';
 import { grassDetailTexture } from './textures.js';
-import { SKY } from './sky.js';
 import { buildVegetation } from './vegetation.js';
+import { buildProps } from './props.js';
 
-export function buildScenery(scene, track) {
-  scene.fog = new THREE.Fog(SKY.horizon.clone(), 260, 1000);
+// Everything around the track for a theme (see themes.js): lights, fog,
+// terrain, water, rocks, plants and props.
+export function buildScenery(scene, track, theme) {
+  const T = theme.terrain;
+  scene.fog = new THREE.Fog(theme.sky.horizon.clone(), theme.fog[0], theme.fog[1]);
 
-  scene.add(new THREE.HemisphereLight(0xdff2ff, 0x5d8a3a, 1.6));
-  const sun = new THREE.DirectionalLight(0xfff4e0, 2.6);
+  scene.add(new THREE.HemisphereLight(...theme.hemi));
+  const sun = new THREE.DirectionalLight(...theme.sunLight);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera;
@@ -23,12 +26,12 @@ export function buildScenery(scene, track) {
   // Neutral speckle texture; terrain colour comes from vertex colours.
   const speckleTex = grassDetailTexture();
   const box = new THREE.Box3().setFromPoints(track.pos);
-  const lake = findLake(track, box);
-  const { heightAt, distToTrack, groundY, ponds, chasms, inChasm, bounds, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake);
+  const lake = T.lake ? findLake(track, box) : null;
+  const { heightAt, distToTrack, groundY, ponds, chasms, inChasm, bounds, mesh: terrain } = buildTerrain(scene, track, box, speckleTex, lake, T);
 
   // Flat backdrop plain at y = -1 *around* the terrain grid (a frame, not a
   // sheet underneath), so valleys and the canyon can go below it.
-  const plainMat = toon(0x7ccf55, { map: speckleTex });
+  const plainMat = toon(T.plain, { map: speckleTex });
   const plainGeo = (x0, z0, x1, z1) => {
     const g = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
     g.rotateX(-Math.PI / 2);
@@ -46,10 +49,13 @@ export function buildScenery(scene, track) {
   ]), plainMat);
   scene.add(plain);
 
-  const waterMat = new THREE.MeshPhysicalMaterial({
-    color: 0x2f8fd8, roughness: 0.08, metalness: 0, clearcoat: 1,
-    transparent: true, opacity: 0.88, envMapIntensity: 1.2,
-  });
+  // Water (or ice, for frozen themes).
+  const waterMat = T.frozen
+    ? new THREE.MeshPhysicalMaterial({ color: T.water, roughness: 0.15, metalness: 0, clearcoat: 1, envMapIntensity: 1.3 })
+    : new THREE.MeshPhysicalMaterial({
+      color: T.water, roughness: 0.08, metalness: 0, clearcoat: 1,
+      transparent: true, opacity: 0.88, envMapIntensity: 1.2,
+    });
   const addWater = (x, z, r, level) => {
     const water = new THREE.Mesh(new THREE.CircleGeometry(r, 48), waterMat);
     water.rotation.x = -Math.PI / 2;
@@ -73,7 +79,7 @@ export function buildScenery(scene, track) {
     const river = new THREE.Mesh(g, waterMat);
     river.material = waterMat.clone();
     river.material.side = THREE.DoubleSide;
-    river.material.color.setHex(0x2a7fd0);
+    river.material.color.setHex(T.water).multiplyScalar(0.9);
     scene.add(river);
     const rockMat = toon(0x8c857c, { flatShading: true });
     for (let n = 0; n < 40; n++) {
@@ -112,22 +118,25 @@ export function buildScenery(scene, track) {
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
-  buildVegetation(scene, { groundY, distToTrack, box, inWater, ponds, tunnelAt: track.tunnelAt });
+  const world = { groundY, distToTrack, box, inWater, ponds, lake, tunnelAt: track.tunnelAt, track, theme };
+  buildVegetation(scene, world);
+  buildProps(scene, world);
 
   // Boulders: a few right behind the walls, more out in the hills.
-  const rocks = [...scatter(140, 1.5, 12, 999, 40), ...scatter(160, 30, 260, 999, 200)];
+  const rocks = [...scatter(theme.rocks.near, 1.5, 12, 999, 40), ...scatter(theme.rocks.far, 30, 260, 999, 200)];
   const rockMesh = new THREE.InstancedMesh(
     new THREE.DodecahedronGeometry(1, 0),
     toon(0xffffff, { flatShading: true }),
-    rocks.length,
+    Math.max(1, rocks.length),
   );
+  rockMesh.count = rocks.length;
   rocks.forEach(([x, y, z], i) => {
     const k = 0.8 + Math.random() * 2.6;
     q.setFromEuler(new THREE.Euler(Math.random() * 3, Math.random() * 3, Math.random() * 3));
     m.compose(new THREE.Vector3(x, y + k * 0.3, z), q, s.set(k * (0.9 + Math.random() * 0.5), k * 0.75, k));
     rockMesh.setMatrixAt(i, m);
-    const g = 0.5 + Math.random() * 0.2;
-    rockMesh.setColorAt(i, c.setRGB(g, g * 0.97, g * 0.92));
+    const g = 0.5 + Math.random() * 0.2, [r0, g0, b0] = theme.rocks.color;
+    rockMesh.setColorAt(i, c.setRGB(g * r0, g * g0, g * b0));
   });
   rockMesh.castShadow = true;
   rockMesh.receiveShadow = true;
@@ -147,7 +156,7 @@ export function buildScenery(scene, track) {
 
   return {
     sun, ground: [terrain, plain], lake, center: box.getCenter(new THREE.Vector3()),
-    groundY, distToTrack, pasture, box, ponds,
+    groundY, distToTrack, pasture, box, ponds, inWater,
   };
 }
 
@@ -181,7 +190,7 @@ function findLake(track, box) {
 // Terrain: flat at road height next to the track, blending into hills that
 // grow into rocky, snow-capped mountains far away, with a lake basin inside
 // the loop. Vertex colours paint grass, dark grass, sand, rock and snow.
-function buildTerrain(scene, track, trackBox, speckleTex, lake) {
+function buildTerrain(scene, track, trackBox, speckleTex, lake, T) {
   const margin = 450;
   const minX = trackBox.min.x - margin, maxX = trackBox.max.x + margin;
   const minZ = trackBox.min.z - margin, maxZ = trackBox.max.z + margin;
@@ -286,7 +295,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
     }
     const w = smoothstep(d, wall + 2, wall + 50);
     const far = smoothstep(d, 90, 380);
-    let free = hills(x, z) * (1 + far * 1.5) + 12 + far * ridges(x, z) * 1.6;
+    let free = hills(x, z) * T.hills * (1 + far * 1.5) + T.base + far * ridges(x, z) * T.mountains;
     // A mountain over the long tunnel: rises steeply from the portals and
     // peaks over the middle; the approach becomes a cutting into its flank.
     for (const t of longTunnels) {
@@ -321,7 +330,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
   // (inside the fine part of the terrain grid so the shoreline is smooth).
   const ponds = [];
   const area = trackBox.clone().expandByScalar(60);
-  for (let tries = 0; ponds.length < 8 && tries < 6000; tries++) {
+  for (let tries = 0; ponds.length < T.ponds && tries < 6000; tries++) {
     const x = lerp(area.min.x, area.max.x, Math.random()), z = lerp(area.min.z, area.max.z, Math.random());
     const r = 8 + Math.random() * 8;
     const [, d, wall] = distToTrack(x, z);
@@ -389,8 +398,8 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
 
   const normal = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
-  const grass = new THREE.Color(0x6cc24a), darkGrass = new THREE.Color(0x4f9e3a);
-  const mud = new THREE.Color(0x8a7a52), sand = new THREE.Color(0xe3d08a), rock = new THREE.Color(0x8b8580), snow = new THREE.Color(0xf6f8ff);
+  const grass = new THREE.Color(T.grass), darkGrass = new THREE.Color(T.darkGrass);
+  const mud = new THREE.Color(T.mud), sand = new THREE.Color(T.sand), rock = new THREE.Color(T.rock), snow = new THREE.Color(T.snow);
   const col = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -405,7 +414,7 @@ function buildTerrain(scene, track, trackBox, speckleTex, lake) {
       if (dd < p.r * 1.6) col.lerp(mud, (1 - smoothstep(dd, p.r * 0.9, p.r * 1.5)) * 0.85);
     }
     col.lerp(rock, smoothstep(steep, 0.12, 0.3));
-    col.lerp(snow, smoothstep(y, 75, 90));
+    col.lerp(snow, smoothstep(y, T.snowLine[0], T.snowLine[1]));
     colors.set([col.r, col.g, col.b], i * 3);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));

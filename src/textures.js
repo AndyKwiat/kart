@@ -17,9 +17,9 @@ function noise(ctx, w, h, amount, tint = [0, 0, 0]) {
 }
 
 // Asphalt across the full road width (u) and 28 units along it (v).
-export function roadTexture() {
+export function roadTexture(asphalt = '#585a64') {
   return canvasTexture(512, 1024, (ctx, w, h) => {
-    ctx.fillStyle = '#585a64';
+    ctx.fillStyle = asphalt;
     ctx.fillRect(0, 0, w, h);
     // Soft blotches and darker racing-line wear.
     for (let i = 0; i < 140; i++) {
@@ -348,5 +348,50 @@ export function bannerTexture(text) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, w / 2, h / 2 + 3);
+  });
+}
+
+// Mossy stone blocks for temple tunnels.
+export function templeWallTexture() {
+  return canvasTexture(512, 512, (ctx, w, h) => {
+    ctx.fillStyle = '#7d7460';
+    ctx.fillRect(0, 0, w, h);
+    const bw = 128, bh = 64;
+    for (let r = 0; r < h / bh; r++) {
+      for (let c = -1; c < w / bw + 1; c++) {
+        const x = c * bw + (r % 2) * (bw / 2), y = r * bh;
+        const t = 100 + Math.random() * 40;
+        ctx.fillStyle = `rgb(${t + 15},${t + 8},${t - 15})`;
+        ctx.fillRect(x + 3, y + 3, bw - 6, bh - 6);
+        // Carved glyph on some blocks.
+        if (Math.random() < 0.18) {
+          ctx.strokeStyle = 'rgba(40,34,24,0.7)';
+          ctx.lineWidth = 4;
+          ctx.strokeRect(x + 30, y + 14, bw - 60, bh - 28);
+          ctx.beginPath(); ctx.arc(x + bw / 2, y + bh / 2, 8, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+    }
+    blotches(ctx, w, h, 70, ['rgba(70,110,40,0.35)', 'rgba(40,30,20,0.25)'], 15, 60);
+    noise(ctx, w, h, 18);
+  });
+}
+
+// Glassy ice for slippery road patches: pale blue with white scratches.
+export function iceTexture() {
+  return canvasTexture(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#cfeaf8';
+    ctx.fillRect(0, 0, w, h);
+    blotches(ctx, w, h, 40, ['rgba(255,255,255,0.5)', 'rgba(150,200,230,0.4)'], 15, 60);
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    for (let i = 0; i < 40; i++) {
+      ctx.lineWidth = 1 + Math.random() * 1.5;
+      ctx.beginPath();
+      const x = Math.random() * w, y = Math.random() * h;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (Math.random() - 0.5) * 60, y + (Math.random() - 0.5) * 60);
+      ctx.stroke();
+    }
+    noise(ctx, w, h, 10);
   });
 }

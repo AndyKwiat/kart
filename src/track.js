@@ -2,111 +2,14 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon, canvasTexture } from './materials.js';
 import { buildTunnel } from './tunnel.js';
+import { THEMES } from './themes.js';
 import { buildChasm } from './chasm.js';
-import { roadTexture, stripeTexture, chevronTexture, padTexture, checkerTexture } from './textures.js';
+import { roadTexture, stripeTexture, chevronTexture, padTexture, checkerTexture, iceTexture } from './textures.js';
 
 export const BASE_HALF_WIDTH = 18;
 export const CURB_WIDTH = 1.4;
 export const RUNOFF = 8; // grass between the curb and the wall
 
-const SCALE = 1.75;
-// All sample indices below are authored against a lap of LAYOUT_N samples and
-// rescaled to the real sample count, so the layout can be resized freely.
-const LAYOUT_N = 4754;
-// Closed loop of control points (x, z). Starts on the top straight heading +x.
-// The eastern half is the original circuit; from [-200, 0] the road heads
-// out on a big western loop and comes back to the start straight.
-const CONTROL = [
-  [-60, 100], [40, 100], [120, 80], [170, 20], [160, -50], [110, -80],
-  [60, -50], [20, -20], [-30, -40], [-60, -100], [-120, -120],
-  [-180, -80], [-200, 0],
-  [-240, 60], [-320, 80], [-400, 40], [-480, 70], [-520, 160], [-490, 260],
-  [-420, 330], [-310, 370], [-200, 350], [-130, 280], [-165, 190], [-135, 118],
-];
-
-// Road width zones (sample indices). Width eases in and out over BLEND samples.
-const BLEND = 45;
-const WIDTH_ZONES = [
-  { from: 320, to: 700, hw: 23 },   // wide right-hand sweeper
-  { from: 860, to: 940, hw: 15 },   // hairpin
-  { from: 1110, to: 1290, hw: 11 }, // narrow technical chicane
-  { from: 1480, to: 1610, hw: 12.5 }, // mountain pass over the summit
-  { from: 2280, to: 2520, hw: 12.5 }, // western esses
-  { from: 4080, to: 4240, hw: 15 },   // valley hairpin
-  { from: 4370, to: 4510, hw: 13 },   // second tunnel
-  { from: 4600, to: 4690, hw: 21 },   // wide run to the finish
-];
-
-// Elevation features layered on the rolling hills. Each is a list of segments
-// (lengths in world units) starting at sample `at`:
-//   kick:   concave ramp up to `to` (a lip that launches you)
-//   flat:   hold height
-//   ease:   smooth slope to `to` (landing)
-//   whoops: `count` rhythm bumps of `height`
-// Every feature is continuous road: there is never a gap to fall into.
-// `side` (-1 left / +1 right) puts a feature on one branch of a fork only.
-const FEATURES = [
-  { at: 140, segs: [{ kick: 14, to: 3 }, { flat: 16 }, { ease: 22, to: 0 }] },
-  // Shortcut lane through the sweeper: pad, then a kicker in a narrow lane.
-  { at: 490, side: -1, segs: [{ kick: 16, to: 2 }, { flat: 8 }, { ease: 16, to: 0 }] },
-  { at: 990, segs: [{ kick: 20, to: 4 }, { flat: 18 }, { ease: 26, to: 0 }] },
-  { at: 1775, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
-  { at: 1960, segs: [{ kick: 12, to: 2.5 }, { flat: 10 }, { kick: 10, to: 5 }, { flat: 14 }, { ease: 26, to: 0 }] },
-  { at: 2400, segs: [{ kick: 10, to: 2 }, { ease: 16, to: 0 }] }, // hop in the esses
-  { at: 2715, side: -1, segs: [{ ease: 50, to: 9 }, { flat: 22 }, { ease: 50, to: 0 }] }, // hill route
-  // THE BIG JUMP: steep downhill run, ramp, then a real gap over a canyon.
-  { at: 3050, segs: [{ ease: 40, to: -7 }, { kick: 22, to: -1 }, { gap: 40, to: -9 }, { ease: 60, to: 0 }] },
-  { at: 3415, side: -1, segs: [{ kick: 14, to: 3.5 }, { flat: 14 }, { ease: 22, to: 0 }] },
-  { at: 3430, side: 1, segs: [{ whoops: 70, count: 7, height: 1.3 }] },
-  { at: 3700, segs: [{ kick: 22, to: 5 }, { flat: 22 }, { ease: 30, to: 0 }] }, // mega jump
-  { at: 3895, side: -1, segs: [{ whoops: 60, count: 6, height: 1.3 }] },
-  { at: 4290, segs: [{ kick: 12, to: 2.5 }, { flat: 8 }, { ease: 16, to: 0 }] },
-  // Shortcut lane through the final S-bend.
-  { at: 4570, side: 1, segs: [{ kick: 16, to: 2 }, { flat: 8 }, { ease: 16, to: 0 }] },
-];
-
-// Forks: the road splits into two routes around a grass island and rejoins.
-// `spread` is how far each route's centre moves from the centreline, `bw`
-// the half-width of each route, `ramp` the samples taken to split/merge.
-// Symmetric forks give `spread`/`bw`; asymmetric ones give `left`/`right`
-// (a narrow inside lane is a risky shortcut: shorter line, pad and kicker).
-const FORKS = [
-  { from: 400, to: 650, ramp: 60, left: { spread: 30, bw: 6.5 }, right: { spread: 24, bw: 12 } }, // sweeper shortcut (inside = left)
-  { from: 2620, to: 3020, spread: 34, bw: 12, ramp: 70 }, // valley: over the hill vs round it
-  { from: 3300, to: 3640, spread: 30, bw: 12, ramp: 60 }, // back straight: jump vs whoops
-  { from: 3850, to: 4060, spread: 24, bw: 11, ramp: 55 }, // downhill: whoops vs pad
-  { from: 4500, to: 4680, ramp: 50, left: { spread: 20, bw: 12 }, right: { spread: 26, bw: 6.5 } }, // S-bend shortcut (inside = right)
-];
-
-// Banked corners: the road tilts up toward the outside of the bend
-// (`slope` = rise per unit of lateral distance at full bank).
-const BANK_ZONES = [
-  { from: 815, to: 965, slope: 0.3 },   // hairpin
-  { from: 1370, to: 1450, slope: 0.22 }, // climb to the summit
-  { from: 4080, to: 4240, slope: 0.3 },  // valley hairpin
-];
-
-// Tunnels through hills: a long mountain tunnel and a short one on the final S-bends.
-// The long one runs through a mountain for about a quarter of the lap; its
-// ceiling height is worked out from jump trajectories (see computeCeiling).
-const TUNNELS = [
-  { from: 1110, to: 2310, long: true },
-  { from: 4390, to: 4490, height: 10 },
-];
-
-// Dash panels: sample index and lateral offset of the pad centre.
-// `branch` (-1/+1) centres a pad on that route of a fork instead.
-const PADS = [
-  { at: 270, lat: 9 },
-  { at: 575, branch: -1 },
-  { at: 960, lat: 0 },
-  { at: 1740, lat: -6 },
-  { at: 2800, branch: 1 },
-  { at: 3032, lat: -9 }, { at: 3032, lat: 0 }, { at: 3032, lat: 9 }, // run-up to the big jump
-  { at: 3380, branch: -1 },
-  { at: 3950, branch: 1 },
-  { at: 4630, branch: 1 },
-];
 export const PAD_HALF_LENGTH = 4;
 const ISLAND_LIFT = 0.45; // height of the island curb above the road
 export const PAD_HALF_WIDTH = 2.6;
@@ -139,9 +42,16 @@ function featureProfile(segs, spacing) {
   return { heights, kicks, gaps };
 }
 
+// Road width zones ease in and out over this many samples.
+const BLEND = 45;
+
 export class Track {
-  constructor() {
-    const pts = CONTROL.map(([x, z]) => new THREE.Vector3(x * SCALE, 0, z * SCALE));
+  // `def` is a track definition (see tracks/*.js): control points, width
+  // zones, elevation features, forks, banks, tunnels, pads, hills, theme.
+  constructor(def) {
+    this.def = def;
+    this.theme = THEMES[def.theme];
+    const pts = def.control.map(([x, z]) => new THREE.Vector3(x * def.scale, 0, z * def.scale));
     const curve = new THREE.CatmullRomCurve3(pts, true, 'centripetal');
     this.length = curve.getLength();
     this.N = Math.round(this.length / 0.7);
@@ -158,15 +68,15 @@ export class Track {
       this.right.push(new THREE.Vector3().crossVectors(t, up).normalize());
     }
 
-    const L = (i) => Math.round((i * this.N) / LAYOUT_N);
-    const widthZones = WIDTH_ZONES.map((z) => ({ ...z, from: L(z.from), to: L(z.to) }));
-    this.bankZones = BANK_ZONES.map((z) => ({ ...z, from: L(z.from), to: L(z.to) }));
-    this.tunnels = TUNNELS.map((t) => ({ ...t, from: L(t.from), to: L(t.to) }));
-    this.forks = FORKS.map((f) => ({ ...f, from: L(f.from), to: L(f.to), ramp: L(f.ramp) }));
+    const L = (i) => Math.round((i * this.N) / def.layoutN);
+    const widthZones = (def.widthZones ?? []).map((z) => ({ ...z, from: L(z.from), to: L(z.to) }));
+    this.bankZones = (def.banks ?? []).map((z) => ({ ...z, from: L(z.from), to: L(z.to) }));
+    this.tunnels = (def.tunnels ?? []).map((t) => ({ ...t, from: L(t.from), to: L(t.to) }));
+    this.forks = (def.forks ?? []).map((f) => ({ ...f, from: L(f.from), to: L(f.to), ramp: L(f.ramp) }));
 
     this.hw = [];
     for (let i = 0; i < this.N; i++) {
-      let hw = BASE_HALF_WIDTH;
+      let hw = def.halfWidth ?? BASE_HALF_WIDTH;
       for (const z of widthZones) {
         const w = THREE.MathUtils.smoothstep(i, z.from - BLEND, z.from) * (1 - THREE.MathUtils.smoothstep(i, z.to, z.to + BLEND));
         hw = THREE.MathUtils.lerp(hw, z.hw, w);
@@ -208,7 +118,7 @@ export class Track {
       const u = (i / this.N) * Math.PI * 2;
       // Frequencies are per lap; doubled when the lap doubled in length so the
       // hills keep the same spacing.
-      this.height.push(11 * Math.sin(u * 4 + 0.6) + 8 * Math.sin(u * 6 + 2.1) + 4 * Math.sin(u * 10 + 0.3) + 2.5 * Math.sin(u * 16 + 1.2));
+      this.height.push(def.hills.reduce((h, [amp, f, ph]) => h + amp * Math.sin(u * f + ph), 0));
     }
 
     // Per-route height offsets inside forks ([left, right]).
@@ -217,7 +127,7 @@ export class Track {
     // Gaps: stretches with no road (the chasm). gapAt marks them per sample.
     this.gaps = [];
     this.gapAt = new Uint8Array(this.N);
-    for (const f of FEATURES) {
+    for (const f of def.features ?? []) {
       const at = L(f.at);
       const { heights, kicks, gaps } = featureProfile(f.segs, this.spacing);
       for (const [a, b] of gaps) {
@@ -234,7 +144,12 @@ export class Track {
     for (let i = 0; i < this.N; i++) lowest = Math.min(lowest, this.height[i] - Math.abs(this.bank[i]) * this.wallOffset(i));
     for (let i = 0; i < this.N; i++) this.height[i] += 2 - lowest;
 
-    this.pads = PADS.map((p) => {
+    // Ice patches (slippery road).
+    this.iceAt = new Uint8Array(this.N);
+    for (const z of def.ice ?? []) for (let i = L(z.from); i <= L(z.to); i++) this.iceAt[this.wrap(i)] = 1;
+    this.iceRanges = (def.ice ?? []).map((z) => [L(z.from), L(z.to)]);
+
+    this.pads = (def.pads ?? []).map((p) => {
       const at = this.wrap(L(p.at));
       const lat = p.branch ? this.route(at, p.branch).center : p.lat;
       return { at, lat, halfSamples: Math.round(PAD_HALF_LENGTH / this.spacing) };
@@ -263,6 +178,7 @@ export class Track {
     this.buildStartLine();
     this.buildJumpMarkings();
     this.buildPads();
+    this.buildIce();
     for (const t of this.tunnels) buildTunnel(this, t);
     for (const f of this.forks) this.buildIsland(f);
     for (const g of this.gaps) buildChasm(this, g);
@@ -513,7 +429,7 @@ export class Track {
   }
 
   buildRoad() {
-    const tex = roadTexture();
+    const tex = roadTexture(this.theme.road.asphalt);
     // Left and right halves, split down the middle (or at the island inside a
     // fork) so each route can sit at its own height.
     const geo = mergeGeometries(this.roadRanges().flatMap(([a, b]) => [
@@ -527,7 +443,7 @@ export class Track {
   }
 
   buildCurbs() {
-    const tex = stripeTexture('#e8312a', '#f6f6f6');
+    const tex = stripeTexture(...this.theme.road.curb);
     const mat = toon(0xffffff, { map: tex });
     const sides = [
       [(k) => -this.hw[k] - CURB_WIDTH, (k) => -this.hw[k]],
@@ -541,7 +457,7 @@ export class Track {
   }
 
   buildWalls() {
-    const tex = stripeTexture('#2f6fe0', '#f6f6f6', { bevel: false });
+    const tex = stripeTexture(...this.theme.road.wall, { bevel: false });
     const mat = toon(0xffffff, { map: tex, side: THREE.DoubleSide });
     for (const side of [-1, 1]) {
       const mesh = new THREE.Mesh(this.wallRibbon(side, 1.1, 6), mat);
@@ -558,6 +474,18 @@ export class Track {
       const lo = side > 0 ? (k) => this.islandEdge(k, 1) : (k) => -this.hw[k];
       const hi = side < 0 ? (k) => this.islandEdge(k, -1) : (k) => this.hw[k];
       const mesh = new THREE.Mesh(this.flatRibbon(lo, hi, 0.04, -9, a, b), mat);
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
+    }
+  }
+
+  // Frosty, glassy overlay where the road is icy.
+  buildIce() {
+    if (!this.iceRanges.length) return;
+    const tex = iceTexture();
+    const mat = toon(0xffffff, { map: tex, transparent: true, opacity: 0.85, depthWrite: false });
+    for (const [a, b] of this.iceRanges) {
+      const mesh = new THREE.Mesh(this.flatRibbon((k) => -this.hw[k] - 0.5, (k) => this.hw[k] + 0.5, 0.035, 12, a, b), mat);
       mesh.receiveShadow = true;
       this.group.add(mesh);
     }
@@ -603,7 +531,7 @@ export class Track {
     top.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     top.setIndex(indices);
     top.computeVertexNormals();
-    const topMesh = new THREE.Mesh(top, toon(0x5fb240));
+    const topMesh = new THREE.Mesh(top, toon(this.theme.road.island));
     topMesh.receiveShadow = true;
     this.group.add(topMesh);
 
@@ -633,8 +561,9 @@ export class Track {
 
     // Trees (and a few boulders) scattered over the mound.
     const trunkGeo = new THREE.CylinderGeometry(0.4, 0.5, 2, 6);
-    const leafGeo = new THREE.ConeGeometry(2.4, 5.5, 7);
-    const trunkMat = toon(0x8a5a32), leafMat = toon(0x2f9e44, { flatShading: true });
+    const isl = this.theme.islandTree ?? { shape: 'cone', leaf: 0x2f9e44 };
+    const leafGeo = isl.shape === 'ball' ? new THREE.IcosahedronGeometry(2.6, 0).scale(1, 0.85, 1) : new THREE.ConeGeometry(2.4, 5.5, 7);
+    const trunkMat = toon(0x8a5a32), leafMat = toon(isl.leaf, { flatShading: true });
     const rockMat = toon(0x8f8a84, { flatShading: true });
     for (let k = from; k <= to; k += 14) {
       const iw = this.islandHw[this.wrap(k)];

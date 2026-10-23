@@ -15,7 +15,7 @@ export function formatTime(t) {
 const hex = (c) => '#' + c.toString(16).padStart(6, '0');
 
 export class Hud {
-  constructor(track) {
+  constructor() {
     this.lap = $('lap');
     this.time = $('time');
     this.speed = $('speed');
@@ -25,8 +25,10 @@ export class Hud {
     this.results = $('results');
     this.resultsList = $('results-list');
     this.flashUntil = 0;
+  }
 
-    // Pre-render the minimap track outline.
+  // New track: pre-render the minimap outline.
+  setTrack(track) {
     const canvas = $('minimap');
     this.mapCtx = canvas.getContext('2d');
     const size = canvas.width;
@@ -209,16 +211,42 @@ export class Hud {
     ctx.stroke();
   }
 
-  showResults(order, player) {
-    this.results.classList.remove('hidden');
-    const html = order.map((car, i) => `
+  showLoading(sub, name) {
+    $('loading-sub').textContent = sub;
+    $('loading-name').textContent = name;
+    $('loading').classList.remove('hidden');
+  }
+
+  hideLoading() {
+    $('loading').classList.add('hidden');
+  }
+
+  // Track title card during the countdown.
+  showTitle(sub, name) {
+    const el = $('title');
+    $('title-sub').textContent = sub;
+    $('title-name').textContent = name;
+    el.classList.remove('hidden', 'fade');
+    clearTimeout(this._titleTimer);
+    this._titleTimer = setTimeout(() => el.classList.add('fade'), 2600);
+  }
+
+  // After a race: this race's result (with points earned) and the circuit table.
+  showStandings({ title, race, totals, player, next }) {
+    const row = (car, rank, right, extra = '') => `
       <li class="${car === player ? 'you' : ''}">
-        <span class="rank">${i + 1}.</span>
+        <span class="rank">${rank}.</span>
         <span class="swatch" style="background:${hex(car.color)}"></span>
         <span class="name">${car.name}</span>
-        <span>${car.finished ? formatTime(car.finishTime) : 'racing…'}</span>
-      </li>`).join('');
-    if (html !== this._results) this.resultsList.innerHTML = this._results = html;
+        ${extra}<span class="val">${right}</span>
+      </li>`;
+    $('results-title').textContent = title;
+    this.resultsList.innerHTML = race
+      .map(({ car, points, time }, i) => row(car, i + 1, `+${points}`, `<span class="time">${time === null ? '—' : formatTime(time)}</span>`))
+      .join('');
+    $('totals-list').innerHTML = totals.map(({ car, pts }, i) => row(car, i + 1, `${pts} pts`)).join('');
+    $('results-next').textContent = next;
+    this.results.classList.remove('hidden');
   }
 
   hideResults() {

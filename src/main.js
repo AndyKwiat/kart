@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { Track } from './track.js';
+import { TRACKS } from './tracks/index.js';
 import { Car, collideCars } from './car.js';
 import { AIDriver } from './ai.js';
 import { Hud } from './hud.js';
 import { buildScenery } from './scenery.js';
-import { Sky, SKY } from './sky.js';
+import { Sky } from './sky.js';
 import { Effects } from './fx.js';
 import { Wildlife } from './animals.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -25,17 +26,11 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
-const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 2400);
 
-const track = new Track();
-scene.add(track.group);
-const world = buildScenery(scene, track);
-const { sun, ground, center } = world;
-track.terrainY = world.groundY; // lets cars drive on the terrain off-track
-const sky = new Sky(scene, renderer, center);
-const effects = new Effects(scene);
-const wildlife = new Wildlife(scene, world, track);
+// The current world (rebuilt for each track of the circuit).
+let scene = new THREE.Scene();
+let track, world, sun, ground, sky, effects, wildlife;
 
 // Render through an HDR target so emissive things (lights, pads, sparks, boost
 // flames) can bloom. Anti-aliasing is FXAA at the end: 4x MSAA on the HDR
@@ -44,7 +39,8 @@ const wildlife = new Wildlife(scene, world, track);
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
 composer.setPixelRatio(pixelRatio);
 composer.setSize(window.innerWidth, window.innerHeight);
-composer.addPass(new RenderPass(scene, camera));
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.45, 1.6);
 // The blur is soft anyway: run the whole bloom chain at half resolution.
 const bloomSetSize = bloom.setSize.bind(bloom);
@@ -94,21 +90,24 @@ function render() {
   composer.render();
   camera.position.sub(shakeOffset);
 }
-const hud = new Hud(track);
+const hud = new Hud();
 
-const COLORS = [0x3b6cff, 0x2fc45a, 0xffd21f, 0x9b4dff, 0xff8a1f, 0x1fd6d6, 0xff5fb8];
+// The field: seven named rivals and you.
+const RIVALS = [
+  ['Rosa', 0x3b6cff], ['Blitz', 0x2fc45a], ['Mika', 0xffd21f], ['Luna', 0x9b4dff],
+  ['Bolt', 0xff8a1f], ['Kiko', 0x1fd6d6], ['Pip', 0xff5fb8],
+];
 const player = new Car(0xe53935, 'You');
 // Slightly lower top speed than before (52) so the player's edge over the
 // AI comes mostly from driving well (drift boosts, lines, dash pads).
 player.maxSpeed = 51;
 player.respawnAfter = 5; // seconds you can spend off the track
-const cars = [...COLORS.map((c, i) => new Car(c, `CPU ${i + 1}`)), player];
-// Opponent top speeds relative to yours: CPU 1-4 +20%, CPU 5-6 +10%.
-// CPU 7 keeps the default top speed with a little less skill.
+const cars = [...RIVALS.map(([name, color]) => new Car(color, name)), player];
+// Opponent top speeds relative to yours: the first four +20%, the next two
+// +10%; the last keeps the default top speed with a little less skill.
 for (const car of cars.slice(0, 4)) car.maxSpeed = player.maxSpeed * 1.2;
 for (const car of cars.slice(4, 6)) car.maxSpeed = player.maxSpeed * 1.1;
 const FULL_SKILL = new Set(cars.slice(0, 6));
-for (const car of cars) scene.add(car.mesh);
 const drivers = new Map();
 const playerAutopilot = new AIDriver(player, 0.9);
 
@@ -117,7 +116,8 @@ const keys = new Set();
 window.addEventListener('keydown', (e) => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   keys.add(e.code);
-  if (e.code === 'KeyR' || (e.code === 'Enter' && state === 'finished')) resetRace();
+  if (e.code === 'Enter' && state === 'standings') nextRace();
+  else if (e.code === 'KeyR' && state !== 'standings' && state !== 'loading') resetRace();
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
@@ -167,7 +167,7 @@ function resetRace() {
     car.updateVisual(0);
     if (car !== player) {
       // Full skill means the AI actually reaches its top speed on straights.
-      const skill = FULL_SKILL.has(car) ? 1 : 0.86 + (COLORS.length - slot) * 0.018 + Math.random() * 0.02;
+      const skill = FULL_SKILL.has(car) ? 1 : 0.86 + (RIVALS.length - slot) * 0.018 + Math.random() * 0.02;
       drivers.set(car, new AIDriver(car, skill));
     }
   });
@@ -223,7 +223,7 @@ function placeCamera(dt, snap = false) {
   camera.fov += (fov - camera.fov) * Math.min(1, dt * 4);
   camera.updateProjectionMatrix();
 
-  sun.position.copy(SKY.sunDir).multiplyScalar(150).add(player.mesh.position);
+  sun.position.copy(sky.sunDir).multiplyScalar(150).add(player.mesh.position);
   sun.target.position.set(player.x, player.y, player.z);
 }
 
@@ -265,6 +265,8 @@ function step(dt) {
         }
       }
     }
+    // Once you're home, wait for the others (or a few seconds), then score.
+    if (state === 'finished' && (cars.every((c) => c.finished) || clock - finishShownAt > 10)) endRace();
   }
 
   for (const car of cars) {
@@ -299,7 +301,6 @@ function updateHud() {
     total: cars.length,
     wrongWay,
   });
-  if (state === 'finished' && clock - finishShownAt > 1.5) hud.showResults(order, player);
   hud.drawMinimap(cars, player);
   hud.drawRadar(cars, player, track, clock);
 }
@@ -319,7 +320,7 @@ function frame(now) {
   const realDt = Math.min(0.05, elapsed);
   last = now;
   // Two substeps keep collisions stable at low frame rates.
-  if (!paused) {
+  if (!paused && track && state !== 'loading') {
     updateCinematic(realDt);
     const dt = realDt * (1 - 0.6 * cine); // slow motion over the chasm
     step(dt / 2);
@@ -341,7 +342,98 @@ window.addEventListener('resize', () => {
   composer.setSize(window.innerWidth, window.innerHeight);
 });
 
-resetRace();
+// ---- Tracks and the circuit ----
+
+// Tear down the previous world (the cars are kept and carried over).
+function disposeScene(old) {
+  for (const car of cars) old.remove(car.mesh);
+  old.traverse((o) => {
+    o.geometry?.dispose();
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const m of mats) {
+      for (const v of Object.values(m)) if (v && v.isTexture) v.dispose();
+      m.dispose();
+    }
+  });
+  old.environment?.dispose();
+}
+
+function loadTrack(def) {
+  if (track) disposeScene(scene);
+  scene = new THREE.Scene();
+  renderPass.scene = scene;
+  track = new Track(def);
+  scene.add(track.group);
+  world = buildScenery(scene, track, track.theme);
+  ({ sun, ground } = world);
+  track.terrainY = world.groundY; // lets cars drive on the terrain off-track
+  sky = new Sky(scene, renderer, world.center, track.theme);
+  effects = new Effects(scene);
+  wildlife = new Wildlife(scene, world, track);
+  for (const car of cars) scene.add(car.mesh);
+  hud.setTrack(track);
+}
+
+// Mario Kart-style points for 1st..8th.
+const POINTS = [15, 12, 10, 8, 6, 4, 2, 1];
+const circuit = { order: [], race: 0, points: new Map(), last: [] };
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function startCircuit() {
+  circuit.order = shuffle(TRACKS);
+  circuit.race = 0;
+  circuit.points = new Map(cars.map((c) => [c, 0]));
+  loadRace();
+}
+
+function loadRace() {
+  const def = circuit.order[circuit.race];
+  state = 'loading';
+  hud.hideResults();
+  hud.showLoading(`Race ${circuit.race + 1} of ${circuit.order.length}`, def.name);
+  // Let the loading card paint before the (blocking) world build.
+  setTimeout(() => {
+    loadTrack(def);
+    resetRace();
+    hud.hideLoading();
+    hud.showTitle(`Race ${circuit.race + 1}/${circuit.order.length}`, def.name);
+  }, 40);
+}
+
+// Score the race: finishers in order, anyone still racing by track position.
+function endRace() {
+  state = 'standings';
+  const order = rankOrder();
+  circuit.last = order.map((car, i) => {
+    circuit.points.set(car, circuit.points.get(car) + POINTS[i]);
+    return { car, points: POINTS[i], time: car.finished ? car.finishTime : null };
+  });
+  const totals = [...circuit.points].sort((a, b) => b[1] - a[1]).map(([car, pts]) => ({ car, pts }));
+  const done = circuit.race === circuit.order.length - 1;
+  hud.showStandings({
+    title: done ? 'Circuit complete!' : `Race ${circuit.race + 1} of ${circuit.order.length}: ${circuit.order[circuit.race].name}`,
+    race: circuit.last,
+    totals,
+    player,
+    next: done ? 'Press Enter for a new circuit' : `Press Enter for race ${circuit.race + 2}: ${circuit.order[circuit.race + 1].name}`,
+  });
+}
+
+function nextRace() {
+  if (circuit.race >= circuit.order.length - 1) return startCircuit();
+  circuit.race++;
+  loadRace();
+}
+
+startCircuit();
 requestAnimationFrame(frame);
 
 // ---- Dev tools ----
@@ -360,6 +452,7 @@ if (import.meta.env.DEV) {
   const groundCheck = (step = 12, from = 0, to = track.N) => {
     const bad = [];
     for (let i = from; i < to; i += step) {
+      if (track.gapAt[i]) continue; // no road over a gap, by design
       const p = track.pos[i], r = track.right[i];
       for (let lat = -track.hw[i] + 1; lat <= track.hw[i] - 1; lat += 6) {
         if (Math.abs(lat - track.islandMid[i]) < track.islandHw[i] + 0.5) continue;
@@ -425,5 +518,11 @@ if (import.meta.env.DEV) {
     camera.updateProjectionMatrix();
     render();
   };
-  window.__kart = { cars, player, track, step, render, effects, wildlife, world, renderer, composer, scene, camera, hud, groundCheck, tour, closeup, resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; } };
+  window.__kart = {
+    cars, player, step, render, renderer, composer, camera, hud, groundCheck, tour, closeup,
+    get track() { return track; }, get world() { return world; }, get scene() { return scene; },
+    get effects() { return effects; }, get wildlife() { return wildlife; }, get state() { return state; },
+    circuit, loadTrack: (id) => { loadTrack(TRACKS.find((t) => t.id === id)); resetRace(); }, endRace, nextRace,
+    resume: () => { paused = false; }, setAutopilot: (on) => { autopilot = on; },
+  };
 }

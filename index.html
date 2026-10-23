@@ -20,11 +20,29 @@
       <div id="speed">0 <span>km/h</span></div>
       <div id="pos">8<sup>th</sup></div>
     </div>
-    <div id="hint">W/↑ gas · S/↓ brake · A/D steer · hold SPACE while turning to drift (release for boost) · R restart</div>
+    <div id="hint">W/↑ gas · S/↓ brake · A/D steer · hold SPACE while turning to drift (release for boost) · R restart race</div>
+    <div id="title" class="hidden">
+      <div id="title-sub"></div>
+      <div id="title-name"></div>
+    </div>
     <div id="results" class="hidden">
-      <h1>RESULTS</h1>
-      <ol id="results-list"></ol>
-      <p>Press <b>R</b> or <b>Enter</b> to race again</p>
+      <h1 id="results-title">RESULTS</h1>
+      <div class="cols">
+        <div>
+          <h2>This race</h2>
+          <ol id="results-list"></ol>
+        </div>
+        <div>
+          <h2>Circuit standings</h2>
+          <ol id="totals-list"></ol>
+        </div>
+      </div>
+      <p id="results-next"></p>
+    </div>
+    <div id="loading" class="hidden">
+      <div id="loading-sub"></div>
+      <div id="loading-name"></div>
+      <div id="loading-dots">Loading…</div>
     </div>
   </div>
   <script type="module" src="/src/main.js"></script>
