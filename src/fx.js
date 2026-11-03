@@ -155,6 +155,17 @@ export class Effects {
       }
       car.pushed = false;
     }
+    // Knocked into a spin: a ring of smoke and a shower of sparks.
+    if (car.spun) {
+      if (near) {
+        for (let i = 0; i < 24; i++) {
+          const a = (i / 24) * Math.PI * 2;
+          this.puff.emit(car.x + Math.cos(a), car.y + 0.4, car.z + Math.sin(a), Math.cos(a) * 7, 2, Math.sin(a) * 7, P.smoke);
+          if (i % 3 === 0) this.glow.emit(car.x, car.y + 1, car.z, rnd(14), 3 + Math.random() * 9, rnd(14), P.spark);
+        }
+      }
+      car.spun = false;
+    }
     if (car.respawned && near) {
       for (let i = 0; i < 18; i++) {
         const a = (i / 18) * Math.PI * 2;

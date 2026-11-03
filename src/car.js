@@ -51,6 +51,15 @@ function solveCornerSpeed(radius, opts) {
   return lo;
 }
 const PUSH_MULT = 1.06; // gentle shove when rear-ended
+// Spin-out (the human smashing a rival from the side or from above).
+const SPIN_TIME = 1.4; // seconds out of control
+const SPIN_TURNS = 3; // visual rotations
+const SPIN_KEEP = 0.2; // speed left straight after the hit
+const SPIN_DRAG = 1.2; // extra slowdown while spinning
+const SPIN_IMMUNE = 1.2; // seconds after recovering before it can happen again
+const SMASH_SPEED = 3; // closing speed that counts as a smash
+const SMASH_INTENT = 1.5; // how fast the human must be moving into the rival
+const NO_INPUT = { throttle: false, brake: false, steer: 0, drift: false };
 const GRAVITY = 32;
 
 const WHEEL_R = 0.55;
@@ -220,6 +229,10 @@ export class Car {
     this.airborne = false;
     this.squash = 0;
     this.push = 0;
+    this.spinOut = 0;
+    this.spinImmune = 0;
+    this.spinDir = 1;
+    this.spun = false;
     this.skid = 0;
     this.onIsland = false;
     this.outside = false; // flew over the wall and is off the track
@@ -249,6 +262,16 @@ export class Car {
   }
 
   update(dt, input, track) {
+    if (this.spinOut > 0) {
+      input = NO_INPUT;
+      this.spinOut = Math.max(0, this.spinOut - dt);
+      const drag = Math.exp(-SPIN_DRAG * dt);
+      this.vx *= drag;
+      this.vz *= drag;
+    } else {
+      this.spinImmune = Math.max(0, this.spinImmune - dt);
+    }
+
     // Smooth digital steering so keyboard input feels analog.
     this.steer += (input.steer - this.steer) * Math.min(1, dt * 10);
 
@@ -496,6 +519,21 @@ export class Car {
     this.progress = this.exitProgress + df;
   }
 
+  // Knocked out of control: most of the speed gone, a few turns on the spot.
+  // Only the visual spins, so the car still knows which way the road goes.
+  startSpin(dir) {
+    this.spinOut = SPIN_TIME;
+    this.spinImmune = SPIN_IMMUNE;
+    this.spinDir = dir;
+    this.spun = true;
+    this.vx *= SPIN_KEEP;
+    this.vz *= SPIN_KEEP;
+    this.speed *= SPIN_KEEP;
+    this.boost = 0;
+    this.push = 0;
+    this.drifting = false;
+  }
+
   // Missed the big jump: back up the run-up (before the boost pads) with
   // some speed, for another go.
   fellIn(track) {
@@ -549,7 +587,9 @@ export class Car {
 
     const targetYaw = this.drifting ? -this.driftDir * 0.38 * DRIFT_STRENGTH : 0;
     this.driftYaw += (targetYaw - this.driftYaw) * Math.min(1, dt * 8);
-    p.visual.rotation.y = this.driftYaw;
+    const spun = 1 - this.spinOut / SPIN_TIME; // ease out: fast at first
+    const spinYaw = this.spinOut > 0 ? this.spinDir * SPIN_TURNS * Math.PI * 2 * (1 - (1 - spun) * (1 - spun)) : 0;
+    p.visual.rotation.y = this.driftYaw + spinYaw;
     p.visual.position.y = this.hopY;
     // Landing squash.
     this.squash = Math.max(0, this.squash - dt * 4);
@@ -570,15 +610,37 @@ export class Car {
   }
 }
 
-// Pushes cars apart; records contact points on both cars for sparks.
-export function collideCars(cars) {
+// The human landing on a rival (falling onto its roof) flattens it and
+// bounces off.
+function stomp(human, rival) {
+  rival.startSpin(Math.random() < 0.5 ? -1 : 1);
+  rival.squash = 1;
+  rival.impacts.push({ x: rival.x, y: rival.y + 1.6, z: rival.z, strength: 16 });
+  human.vy = 9;
+  human.y = Math.max(human.y, rival.y + 1.4);
+  human.airborne = true;
+  human.landed = 8;
+}
+
+// Pushes cars apart; records contact points on both cars for sparks. `human`
+// is the one car whose hits spin rivals out (never the other way round).
+export function collideCars(cars, human) {
   const minD = CAR_RADIUS * 2;
   for (let i = 0; i < cars.length; i++) {
     for (let j = i + 1; j < cars.length; j++) {
       const a = cars[i], b = cars[j];
       const dx = b.x - a.x, dz = b.z - a.z;
       const d2 = dx * dx + dz * dz;
-      if (d2 >= minD * minD || d2 < 1e-6 || Math.abs(a.y - b.y) > 1.5) continue;
+      if (d2 >= minD * minD || d2 < 1e-6) continue;
+      if (human === a || human === b) {
+        const rival = human === a ? b : a;
+        const above = human.y - rival.y;
+        if (human.airborne && human.vy < -1 && above > 0.4 && above < 2.1 && rival.spinImmune <= 0) {
+          stomp(human, rival);
+          continue;
+        }
+      }
+      if (Math.abs(a.y - b.y) > 1.5) continue;
       const d = Math.sqrt(d2);
       const nx = dx / d, nz = dz / d;
       const overlap = (minD - d) / 2;
@@ -600,6 +662,23 @@ export function collideCars(cars) {
         const fa = [Math.sin(a.heading), Math.cos(a.heading)], fb = [Math.sin(b.heading), Math.cos(b.heading)];
         const sameWay = fa[0] * fb[0] + fa[1] * fb[1] > 0.5;
         const slow = (car, k) => { car.vx *= 1 - k * strength; car.vz *= 1 - k * strength; };
+        // The human smashing into a rival's side spins it out, at no cost to
+        // the human. A rival swerving into the human just bumps as usual.
+        if (human === a || human === b) {
+          const rival = human === a ? b : a, sign = human === a ? 1 : -1;
+          const into = (human.vx * nx + human.vz * nz) * sign;
+          const along = (nx * Math.sin(rival.heading) + nz * Math.cos(rival.heading));
+          if (-rv > SMASH_SPEED && into > SMASH_INTENT && Math.abs(along) < 0.7 && rival.spinImmune <= 0) {
+            rival.startSpin(sign * (nx * Math.cos(rival.heading) - nz * Math.sin(rival.heading)) > 0 ? 1 : -1);
+            rival.vx += nx * sign * 5;
+            rival.vz += nz * sign * 5;
+          }
+          if (rival.spinOut > 0) {
+            human.vx += nx * sign * jImp;
+            human.vz += nz * sign * jImp;
+            continue;
+          }
+        }
         let rear = null, front = null;
         if (sameWay && nx * fa[0] + nz * fa[1] > 0.7) { rear = a; front = b; }
         else if (sameWay && -(nx * fb[0] + nz * fb[1]) > 0.7) { rear = b; front = a; }

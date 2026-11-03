@@ -42,6 +42,12 @@ export class AIDriver {
     const car = this.car;
     const out = { throttle: true, brake: false, steer: 0, drift: false };
 
+    // Spinning out: nothing to decide (and being slow isn't being stuck).
+    if (car.spinOut > 0) {
+      this.stuckTime = 0;
+      return out;
+    }
+
     // Unstick: if pinned against a wall, back up briefly.
     if (this.reverseTime > 0) {
       this.reverseTime -= dt;

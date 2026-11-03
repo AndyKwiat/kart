@@ -251,7 +251,7 @@ function step(dt) {
       }
       car.update(dt, input, track);
     }
-    collideCars(cars);
+    collideCars(cars, player.finished ? null : player);
 
     for (const car of cars) {
       if (!car.finished && car.progress >= LAPS * track.N) {
@@ -319,20 +319,25 @@ function frame(now) {
   const elapsed = (now - last) / 1000;
   const realDt = Math.min(0.05, elapsed);
   last = now;
-  // Two substeps keep collisions stable at low frame rates.
   if (!paused && track && state !== 'loading') {
-    updateCinematic(realDt);
-    const dt = realDt * (1 - 0.6 * cine); // slow motion over the chasm
-    step(dt / 2);
-    step(dt / 2);
-    effects.update(dt);
-    wildlife.update(dt, cars);
-    sky.update(dt, camera);
-    updateHud();
-    render();
+    simFrame(realDt);
     if (cine < 0.05) adaptQuality(elapsed); // slow-mo frames aren't a perf signal
   }
   requestAnimationFrame(frame);
+}
+
+// One rendered frame of game time (also used by the dev frame-capture tool).
+function simFrame(realDt) {
+  updateCinematic(realDt);
+  const dt = realDt * (1 - 0.6 * cine); // slow motion over the chasm
+  // Two substeps keep collisions stable at low frame rates.
+  step(dt / 2);
+  step(dt / 2);
+  effects.update(dt);
+  wildlife.update(dt, cars);
+  sky.update(dt, camera);
+  updateHud();
+  render();
 }
 
 window.addEventListener('resize', () => {
@@ -508,6 +513,36 @@ if (import.meta.env.DEV) {
     return log;
   };
 
+  // __kart.film({ trackId, before, speed, seconds, fps }): AI drives you into
+  // the track's big jump and the game is stepped at a fixed 60 fps (slow-mo
+  // and cinematic camera included), returning canvas frames as data URLs.
+  const film = ({ trackId = 'alpine', before = 70, speed = 58, seconds = 3, fps = 15 } = {}) => {
+    if (track.def.id !== trackId) loadTrack(TRACKS.find((t) => t.id === trackId));
+    resetRace();
+    paused = true;
+    autopilot = true;
+    while (state === 'countdown') step(1 / 120);
+    const g = track.gaps[0];
+    const i = track.wrap(g.from - before);
+    const hd = track.headingAt(i);
+    player.reset(track.pos[i].x, track.pos[i].z, hd, i, i);
+    player.y = track.height[i];
+    player.vx = Math.sin(hd) * speed;
+    player.vz = Math.cos(hd) * speed;
+    player.boost = 0.6;
+    cine = 0;
+    placeCamera(0, true);
+    const frames = [];
+    const per = Math.round(60 / fps);
+    for (let n = 0; n < seconds * 60; n++) {
+      simFrame(1 / 60);
+      if (n % per === 0) frames.push(renderer.domElement.toDataURL('image/png'));
+    }
+    autopilot = false;
+    paused = false;
+    return frames;
+  };
+
   // __kart.closeup(car): freeze the loop and frame a beauty shot of a car.
   const closeup = (car = cars[0], angle = 2.4, dist = 7, height = 2.2) => {
     paused = true;
@@ -519,7 +554,7 @@ if (import.meta.env.DEV) {
     render();
   };
   window.__kart = {
-    cars, player, step, render, renderer, composer, camera, hud, groundCheck, tour, closeup,
+    cars, player, step, render, renderer, composer, camera, hud, groundCheck, tour, closeup, film,
     get track() { return track; }, get world() { return world; }, get scene() { return scene; },
     get effects() { return effects; }, get wildlife() { return wildlife; }, get state() { return state; },
     circuit, loadTrack: (id) => { loadTrack(TRACKS.find((t) => t.id === id)); resetRace(); }, endRace, nextRace,
